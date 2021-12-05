@@ -1,0 +1,587 @@
+WARNING:root:08/26/2021 12:24:50 AM	This message should go to the log file
+DEBUG:root:08/26/2021 12:24:50 AM	This message should go to the log file
+INFO:numexpr.utils:Note: NumExpr detected 12 cores but "NUMEXPR_MAX_THREADS" not set, so enforcing safe limit of 8.
+INFO:numexpr.utils:NumExpr defaulting to 8 threads.
+DEBUG:root:08/26/2021 12:25:10 AM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/26/2021 12:25:10 AM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/26/2021 01:01:14 AM	This message should go to the log file
+DEBUG:root:08/26/2021 01:01:14 AM	This message should go to the log file
+DEBUG:root:08/26/2021 01:01:25 AM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/26/2021 01:01:25 AM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/26/2021 01:09:21 AM	This message should go to the log file
+DEBUG:root:08/26/2021 01:09:21 AM	This message should go to the log file
+DEBUG:root:08/26/2021 01:09:28 AM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/26/2021 01:09:28 AM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/26/2021 10:00:02 AM	This message should go to the log file
+DEBUG:root:08/26/2021 10:00:02 AM	This message should go to the log file
+WARNING:root:08/26/2021 10:03:48 AM	This message should go to the log file
+DEBUG:root:08/26/2021 10:03:48 AM	This message should go to the log file
+DEBUG:root:08/26/2021 10:04:01 AM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/26/2021 10:04:01 AM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/26/2021 10:22:35 AM	This message should go to the log file
+DEBUG:root:08/26/2021 10:22:35 AM	This message should go to the log file
+INFO:numexpr.utils:Note: NumExpr detected 12 cores but "NUMEXPR_MAX_THREADS" not set, so enforcing safe limit of 8.
+INFO:numexpr.utils:NumExpr defaulting to 8 threads.
+DEBUG:root:08/26/2021 10:22:46 AM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/26/2021 10:22:46 AM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/26/2021 12:00:59 PM	This message should go to the log file
+DEBUG:root:08/26/2021 12:00:59 PM	This message should go to the log file
+DEBUG:root:08/26/2021 12:01:10 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/26/2021 12:01:10 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/26/2021 12:41:27 PM	This message should go to the log file
+DEBUG:root:08/26/2021 12:41:27 PM	This message should go to the log file
+DEBUG:root:08/26/2021 12:41:40 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/26/2021 12:41:40 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/26/2021 12:45:34 PM	This message should go to the log file
+DEBUG:root:08/26/2021 12:45:34 PM	This message should go to the log file
+INFO:numexpr.utils:Note: NumExpr detected 12 cores but "NUMEXPR_MAX_THREADS" not set, so enforcing safe limit of 8.
+INFO:numexpr.utils:NumExpr defaulting to 8 threads.
+DEBUG:root:08/26/2021 12:46:02 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/26/2021 12:46:02 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/26/2021 01:11:19 PM	This message should go to the log file
+DEBUG:root:08/26/2021 01:11:19 PM	This message should go to the log file
+DEBUG:root:08/26/2021 01:11:26 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/26/2021 01:11:26 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/26/2021 01:35:14 PM	This message should go to the log file
+DEBUG:root:08/26/2021 01:35:14 PM	This message should go to the log file
+DEBUG:root:08/26/2021 01:35:21 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/26/2021 01:35:21 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/26/2021 01:55:43 PM	This message should go to the log file
+DEBUG:root:08/26/2021 01:55:43 PM	This message should go to the log file
+DEBUG:root:08/26/2021 01:55:52 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/26/2021 01:55:52 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 12:52:13 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 12:52:13 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 12:52:57 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 12:52:57 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/27/2021 12:53:56 PM	This message should go to the log file
+DEBUG:root:08/27/2021 12:53:56 PM	This message should go to the log file
+DEBUG:root:08/27/2021 12:54:06 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 12:54:06 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/27/2021 12:56:09 PM	This message should go to the log file
+DEBUG:root:08/27/2021 12:56:09 PM	This message should go to the log file
+DEBUG:root:08/27/2021 12:56:16 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 12:56:16 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/27/2021 01:02:47 PM	This message should go to the log file
+DEBUG:root:08/27/2021 01:02:47 PM	This message should go to the log file
+DEBUG:root:08/27/2021 01:02:55 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 01:02:55 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/27/2021 01:14:16 PM	This message should go to the log file
+DEBUG:root:08/27/2021 01:14:16 PM	This message should go to the log file
+DEBUG:root:08/27/2021 01:17:20 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 01:17:26 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 01:18:15 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 01:18:24 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 01:27:09 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:27:09 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 01:28:57 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:28:57 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 01:29:51 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:29:51 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 01:31:46 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:31:46 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 01:31:46 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:31:46 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 01:31:46 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:31:46 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 01:31:46 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:31:46 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 01:34:12 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:12 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 01:34:14 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:14 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 01:34:14 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:14 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 01:34:14 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:14 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 01:34:14 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:14 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 01:34:14 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 01:34:24 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:24 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 01:34:24 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:24 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 01:34:24 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:24 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 01:34:24 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:24 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 01:34:24 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 01:34:31 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:31 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 01:34:31 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:31 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 01:34:31 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:31 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 01:34:31 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 01:34:31 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 01:34:31 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+WARNING:root:08/27/2021 02:26:25 PM	This message should go to the log file
+DEBUG:root:08/27/2021 02:26:25 PM	This message should go to the log file
+DEBUG:root:08/27/2021 02:26:34 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:26:36 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:26:42 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:26:42 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 02:26:44 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:26:44 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:26:45 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:26:45 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:26:47 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:26:47 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 02:26:47 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:26:47 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 02:26:47 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:26:47 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:26:47 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:26:47 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 02:26:47 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+WARNING:root:08/27/2021 02:28:26 PM	This message should go to the log file
+DEBUG:root:08/27/2021 02:28:26 PM	This message should go to the log file
+DEBUG:root:08/27/2021 02:28:29 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:28:29 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:28:34 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:28:34 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 02:28:36 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:28:36 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:28:37 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:28:37 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:28:38 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:28:38 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 02:28:38 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:28:38 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 02:28:38 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:28:38 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:28:38 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:28:38 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 02:28:38 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 02:29:10 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:29:10 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 02:29:10 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:29:10 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 02:29:10 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:29:10 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:29:10 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:29:10 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 02:29:10 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+WARNING:root:08/27/2021 02:29:36 PM	This message should go to the log file
+DEBUG:root:08/27/2021 02:29:36 PM	This message should go to the log file
+DEBUG:root:08/27/2021 02:29:38 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:29:40 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:29:47 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:29:47 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 02:29:50 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:29:50 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:29:51 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:29:51 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:29:52 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:29:52 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 02:29:52 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:29:52 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 02:29:52 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:29:52 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:29:52 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:29:52 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 02:29:52 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 02:30:52 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:30:52 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:31:15 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:31:15 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:31:27 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:31:27 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:31:46 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:31:46 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:32:02 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:32:02 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:32:24 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:32:24 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:32:53 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:32:53 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:32:54 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:32:54 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:32:55 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:32:55 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 02:32:55 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:32:55 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 02:32:55 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:32:55 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:32:55 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:32:55 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 02:32:55 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+WARNING:root:08/27/2021 02:33:03 PM	This message should go to the log file
+DEBUG:root:08/27/2021 02:33:03 PM	This message should go to the log file
+DEBUG:root:08/27/2021 02:33:06 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:33:07 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:33:10 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:33:10 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 02:33:12 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:33:12 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:33:13 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:33:13 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:33:14 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:33:14 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 02:33:14 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:33:14 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 02:33:14 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:33:14 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 02:33:14 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 02:33:14 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 02:33:14 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 02:33:20 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:33:20 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:35:19 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:35:19 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:37:37 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:37:37 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 02:37:58 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 02:37:58 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 03:02:48 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 03:02:48 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/27/2021 03:03:10 PM	This message should go to the log file
+DEBUG:root:08/27/2021 03:03:10 PM	This message should go to the log file
+DEBUG:root:08/27/2021 03:03:14 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 03:03:15 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 03:03:20 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 03:03:20 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 03:03:21 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 03:03:21 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 03:03:22 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 03:03:22 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 03:03:23 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 03:03:23 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 03:03:23 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 03:03:23 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 03:03:23 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 03:03:23 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 03:03:23 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 03:03:23 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 03:03:23 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 03:03:24 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 03:03:24 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/27/2021 03:05:19 PM	This message should go to the log file
+DEBUG:root:08/27/2021 03:05:19 PM	This message should go to the log file
+WARNING:root:08/27/2021 04:00:35 PM	This message should go to the log file
+DEBUG:root:08/27/2021 04:00:35 PM	This message should go to the log file
+WARNING:root:08/27/2021 04:02:23 PM	This message should go to the log file
+DEBUG:root:08/27/2021 04:02:23 PM	This message should go to the log file
+WARNING:root:08/27/2021 04:02:51 PM	This message should go to the log file
+DEBUG:root:08/27/2021 04:02:51 PM	This message should go to the log file
+DEBUG:root:08/27/2021 04:03:29 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 04:03:30 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 04:03:35 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 04:03:35 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 04:03:36 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 04:03:36 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 04:03:37 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 04:03:37 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 04:03:37 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 04:03:37 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/27/2021 04:03:37 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 04:03:37 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 04:03:37 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 04:03:37 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 04:03:37 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/27/2021 04:03:37 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 04:03:37 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 04:03:39 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 04:03:39 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 04:03:45 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 04:03:45 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 04:04:17 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 04:04:17 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 04:04:35 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 04:04:35 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 04:26:27 PM	3 months are found in the test set (usage)
+DEBUG:root:08/27/2021 04:27:47 PM	3 months are found in the test set (usage)
+WARNING:root:['08/27/2021 04:27:48 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:27:48 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:27:48 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:27:48 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:27:48 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:27:48 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/27/2021 04:28:05 PM	3 months are found in the test set (usage)
+WARNING:root:['08/27/2021 04:28:06 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:28:06 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:28:06 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:28:06 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:28:06 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:28:06 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/27/2021 04:36:08 PM	3 months are found in the test set (usage)
+WARNING:root:['08/27/2021 04:36:08 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:36:08 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:36:08 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:36:08 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:36:08 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:36:08 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/27/2021 04:36:20 PM	3 months are found in the test set (usage)
+WARNING:root:['08/27/2021 04:36:20 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:36:20 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:36:20 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:36:20 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:36:20 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:36:20 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/27/2021 04:36:22 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 04:36:22 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 04:36:22 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 04:36:22 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 04:37:56 PM	3 months are found in the test set (usage)
+WARNING:root:['08/27/2021 04:37:57 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:37:57 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:37:57 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:37:57 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:37:57 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:37:57 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/27/2021 04:37:59 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 04:37:59 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 04:37:59 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 04:37:59 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 04:38:19 PM	3 months are found in the test set (usage)
+WARNING:root:['08/27/2021 04:38:20 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:38:20 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:38:20 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:38:20 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:38:20 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:38:20 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/27/2021 04:38:22 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 04:38:22 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 04:38:22 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 04:38:22 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 04:38:39 PM	3 months are found in the test set (usage)
+WARNING:root:['08/27/2021 04:38:40 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:38:40 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:38:40 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:38:40 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:38:40 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:38:40 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/27/2021 04:38:42 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 04:38:42 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 04:38:42 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 04:38:42 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 04:41:50 PM	3 months are found in the test set (usage)
+WARNING:root:['08/27/2021 04:41:50 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:41:50 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:41:50 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:41:50 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:41:50 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:41:50 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/27/2021 04:41:52 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 04:41:52 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 04:41:52 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 04:41:52 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 04:42:18 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 04:42:18 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 04:48:49 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/27/2021 04:48:49 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/27/2021 04:48:51 PM	3 months are found in the test set (usage)
+WARNING:root:['08/27/2021 04:48:52 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:48:52 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:48:52 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:48:52 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:48:52 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:48:52 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/27/2021 04:48:57 PM	3 months are found in the test set (usage)
+WARNING:root:['08/27/2021 04:48:58 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:48:58 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:48:58 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:48:58 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:48:58 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:48:58 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/27/2021 04:49:00 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 04:49:00 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 04:49:00 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 04:49:00 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/27/2021 04:49:22 PM	3 months are found in the test set (usage)
+WARNING:root:['08/27/2021 04:49:23 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:49:23 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:49:23 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:49:23 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:49:23 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:49:23 PM\t These Med Ids had no medfulname:\t2261']
+WARNING:root:['08/27/2021 04:55:44 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:55:44 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:55:44 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:55:44 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:55:44 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:55:44 PM\t These Med Ids had no medfulname:\t2261']
+WARNING:root:['08/27/2021 04:56:01 PM\t These Med Ids had no medfulname:\t3134'
+ '08/27/2021 04:56:01 PM\t These Med Ids had no medfulname:\t12509'
+ '08/27/2021 04:56:01 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/27/2021 04:56:01 PM\t These Med Ids had no medfulname:\t6813'
+ '08/27/2021 04:56:01 PM\t These Med Ids had no medfulname:\t99951'
+ '08/27/2021 04:56:01 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/27/2021 04:56:03 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/27/2021 04:56:03 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/27/2021 04:56:03 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/27/2021 04:56:03 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+WARNING:root:08/30/2021 11:08:52 AM	This message should go to the log file
+DEBUG:root:08/30/2021 11:08:52 AM	This message should go to the log file
+WARNING:root:08/30/2021 04:26:36 PM	This message should go to the log file
+DEBUG:root:08/30/2021 04:26:36 PM	This message should go to the log file
+DEBUG:root:08/30/2021 04:26:38 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:26:42 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:26:49 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/30/2021 04:26:49 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/30/2021 04:27:05 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/30/2021 04:27:05 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/30/2021 04:27:12 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/30/2021 04:27:12 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/30/2021 04:27:12 PM	medfulname column is missed in input prepared dataset (all)
+DEBUG:root:08/30/2021 04:27:12 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/30/2021 04:27:12 PM	devicetypekey column is missed in input prepared dataset (all)
+DEBUG:root:08/30/2021 04:27:12 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/30/2021 04:27:12 PM	inventoryquantity column is missed in input prepared dataset (all)
+DEBUG:root:08/30/2021 04:27:12 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/30/2021 04:27:12 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/30/2021 04:27:23 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:27:23 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:27:33 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:27:33 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:['08/30/2021 04:27:37 PM\t These Med Ids had no medfulname:\t3134'
+ '08/30/2021 04:27:37 PM\t These Med Ids had no medfulname:\t12509'
+ '08/30/2021 04:27:37 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/30/2021 04:27:37 PM\t These Med Ids had no medfulname:\t6813'
+ '08/30/2021 04:27:37 PM\t These Med Ids had no medfulname:\t99951'
+ '08/30/2021 04:27:37 PM\t These Med Ids had no medfulname:\t2261']
+WARNING:root:['08/30/2021 04:28:05 PM\t These Med Ids had no medfulname:\t3134'
+ '08/30/2021 04:28:05 PM\t These Med Ids had no medfulname:\t12509'
+ '08/30/2021 04:28:05 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/30/2021 04:28:05 PM\t These Med Ids had no medfulname:\t6813'
+ '08/30/2021 04:28:05 PM\t These Med Ids had no medfulname:\t99951'
+ '08/30/2021 04:28:05 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/30/2021 04:28:07 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/30/2021 04:28:07 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/30/2021 04:28:07 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/30/2021 04:28:07 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+WARNING:root:['08/30/2021 04:28:21 PM\t These Med Ids had no medfulname:\t3134'
+ '08/30/2021 04:28:21 PM\t These Med Ids had no medfulname:\t12509'
+ '08/30/2021 04:28:21 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/30/2021 04:28:21 PM\t These Med Ids had no medfulname:\t6813'
+ '08/30/2021 04:28:21 PM\t These Med Ids had no medfulname:\t99951'
+ '08/30/2021 04:28:21 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/30/2021 04:28:23 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/30/2021 04:28:23 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/30/2021 04:28:23 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/30/2021 04:28:23 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/30/2021 04:28:26 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:28:26 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:28:31 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:28:31 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:29:47 PM	3 months are found in the test set (usage)
+DEBUG:root:08/30/2021 04:32:37 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:32:38 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:32:41 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/30/2021 04:32:41 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/30/2021 04:33:38 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:33:38 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:33:43 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:33:43 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:34:31 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:34:31 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:08/30/2021 04:34:50 PM	This message should go to the log file
+DEBUG:root:08/30/2021 04:34:50 PM	This message should go to the log file
+DEBUG:root:08/30/2021 04:35:05 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:35:05 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:35:15 PM	meditemflag column is missed in input prepared dataset (all)
+DEBUG:root:08/30/2021 04:35:15 PM	Something is wrong!!! remove_non_drug_items outcome is empty
+DEBUG:root:08/30/2021 04:35:27 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:35:27 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:35:33 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:35:33 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:['08/30/2021 04:35:36 PM\t These Med Ids had no medfulname:\t3134'
+ '08/30/2021 04:35:36 PM\t These Med Ids had no medfulname:\t12509'
+ '08/30/2021 04:35:36 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/30/2021 04:35:36 PM\t These Med Ids had no medfulname:\t6813'
+ '08/30/2021 04:35:36 PM\t These Med Ids had no medfulname:\t99951'
+ '08/30/2021 04:35:36 PM\t These Med Ids had no medfulname:\t2261']
+WARNING:root:['08/30/2021 04:35:44 PM\t These Med Ids had no medfulname:\t3134'
+ '08/30/2021 04:35:44 PM\t These Med Ids had no medfulname:\t12509'
+ '08/30/2021 04:35:44 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/30/2021 04:35:44 PM\t These Med Ids had no medfulname:\t6813'
+ '08/30/2021 04:35:44 PM\t These Med Ids had no medfulname:\t99951'
+ '08/30/2021 04:35:44 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/30/2021 04:35:46 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/30/2021 04:35:46 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/30/2021 04:35:46 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/30/2021 04:35:46 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/30/2021 04:35:49 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:35:49 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:35:52 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:35:52 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:37:22 PM	3 months are found in the test set (usage)
+WARNING:root:08/30/2021 04:40:07 PM	This message should go to the log file
+DEBUG:root:08/30/2021 04:40:07 PM	This message should go to the log file
+INFO:numexpr.utils:Note: NumExpr detected 12 cores but "NUMEXPR_MAX_THREADS" not set, so enforcing safe limit of 8.
+INFO:numexpr.utils:NumExpr defaulting to 8 threads.
+DEBUG:root:08/30/2021 04:40:11 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:40:11 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:40:17 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:40:17 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:40:23 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:40:23 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:['08/30/2021 04:40:24 PM\t These Med Ids had no medfulname:\t3134'
+ '08/30/2021 04:40:24 PM\t These Med Ids had no medfulname:\t12509'
+ '08/30/2021 04:40:24 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/30/2021 04:40:24 PM\t These Med Ids had no medfulname:\t6813'
+ '08/30/2021 04:40:24 PM\t These Med Ids had no medfulname:\t99951'
+ '08/30/2021 04:40:24 PM\t These Med Ids had no medfulname:\t2261']
+WARNING:root:['08/30/2021 04:40:27 PM\t These Med Ids had no medfulname:\t3134'
+ '08/30/2021 04:40:27 PM\t These Med Ids had no medfulname:\t12509'
+ '08/30/2021 04:40:27 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/30/2021 04:40:27 PM\t These Med Ids had no medfulname:\t6813'
+ '08/30/2021 04:40:27 PM\t These Med Ids had no medfulname:\t99951'
+ '08/30/2021 04:40:27 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/30/2021 04:40:29 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/30/2021 04:40:29 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/30/2021 04:40:29 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/30/2021 04:40:29 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/30/2021 04:40:31 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/30/2021 04:40:31 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/30/2021 04:41:11 PM	3 months are found in the test set (usage)
+WARNING:root:08/31/2021 09:56:45 PM	This message should go to the log file
+DEBUG:root:08/31/2021 09:56:45 PM	This message should go to the log file
+DEBUG:root:08/31/2021 09:57:00 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/31/2021 09:57:03 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/31/2021 09:57:23 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/31/2021 09:57:23 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/31/2021 09:57:32 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/31/2021 09:57:32 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:['08/31/2021 09:57:37 PM\t These Med Ids had no medfulname:\t3134'
+ '08/31/2021 09:57:37 PM\t These Med Ids had no medfulname:\t12509'
+ '08/31/2021 09:57:37 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/31/2021 09:57:37 PM\t These Med Ids had no medfulname:\t6813'
+ '08/31/2021 09:57:37 PM\t These Med Ids had no medfulname:\t99951'
+ '08/31/2021 09:57:37 PM\t These Med Ids had no medfulname:\t2261']
+WARNING:root:08/31/2021 10:39:00 PM	This message should go to the log file
+DEBUG:root:08/31/2021 10:39:00 PM	This message should go to the log file
+DEBUG:root:08/31/2021 10:39:02 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/31/2021 10:39:03 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/31/2021 10:39:13 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/31/2021 10:39:13 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+DEBUG:root:08/31/2021 10:39:21 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/31/2021 10:39:21 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
+WARNING:root:['08/31/2021 10:39:22 PM\t These Med Ids had no medfulname:\t3134'
+ '08/31/2021 10:39:22 PM\t These Med Ids had no medfulname:\t12509'
+ '08/31/2021 10:39:22 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/31/2021 10:39:22 PM\t These Med Ids had no medfulname:\t6813'
+ '08/31/2021 10:39:22 PM\t These Med Ids had no medfulname:\t99951'
+ '08/31/2021 10:39:22 PM\t These Med Ids had no medfulname:\t2261']
+WARNING:root:['08/31/2021 10:39:25 PM\t These Med Ids had no medfulname:\t3134'
+ '08/31/2021 10:39:25 PM\t These Med Ids had no medfulname:\t12509'
+ '08/31/2021 10:39:25 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/31/2021 10:39:25 PM\t These Med Ids had no medfulname:\t6813'
+ '08/31/2021 10:39:25 PM\t These Med Ids had no medfulname:\t99951'
+ '08/31/2021 10:39:25 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/31/2021 10:39:27 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/31/2021 10:39:27 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/31/2021 10:39:27 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/31/2021 10:39:27 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+WARNING:root:['08/31/2021 10:40:04 PM\t These Med Ids had no medfulname:\t3134'
+ '08/31/2021 10:40:04 PM\t These Med Ids had no medfulname:\t12509'
+ '08/31/2021 10:40:04 PM\t These Med Ids had no medfulname:\t1490' ...
+ '08/31/2021 10:40:04 PM\t These Med Ids had no medfulname:\t6813'
+ '08/31/2021 10:40:04 PM\t These Med Ids had no medfulname:\t99951'
+ '08/31/2021 10:40:04 PM\t These Med Ids had no medfulname:\t2261']
+DEBUG:root:08/31/2021 10:40:06 PM	Something is wrong!!! remove_insulins outcome is empty
+DEBUG:root:08/31/2021 10:40:06 PM	Something is wrong!!! remove_anesthesia_stations outcome is empty
+DEBUG:root:08/31/2021 10:40:06 PM	Something is wrong!!! remove_outofrange_inv outcome is empty
+DEBUG:root:08/31/2021 10:40:06 PM	Something is wrong!!! apply_STE_exclusions outcome is empty
+DEBUG:root:08/31/2021 10:40:10 PM	duplicated med full names: Duplicated rows when adding medfullnameto the test/training dataset
+DEBUG:root:08/31/2021 10:40:10 PM	duplicated dispensing device names: Duplicated rows when adding dispensingdevicenameto the test/training dataset
