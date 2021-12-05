@@ -1,0 +1,7 @@
+,MAE_Dashboard,MAE_Dashboard,MAE_Dashboard,MAE_Dashboard,MAE_Dashboard,MAE_Dashboard,MAE_Dashboard,MAE_Dashboard,MAE_Estimator_Model,MAE_Estimator_Model,MAE_Estimator_Model,MAE_Estimator_Model,MAE_Estimator_Model,MAE_Estimator_Model,MAE_Estimator_Model,MAE_Estimator_Model
+,count,mean,std,min,25%,50%,75%,max,count,mean,std,min,25%,50%,75%,max
+months_w_removals,,,,,,,,,,,,,,,,
+2,384.0,1.09375,3.3188381527385613,0.0,0.0,0.0,0.0,27.0,384.0,3.3359375,1.7204529600452492,0.0,2.0,4.0,5.0,9.0
+3,85.0,1.2941176470588236,4.199839932924215,0.0,0.0,0.0,0.0,24.0,85.0,6.176470588235294,4.427125452922059,0.0,3.0,5.0,9.0,18.0
+4,62.0,2.2903225806451615,5.167321964778128,0.0,0.0,0.0,1.75,25.0,62.0,3.064516129032258,4.303528737919178,0.0,0.0,2.0,4.0,18.0
+5,7.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.0,1.0,0.816496580927726,0.0,0.5,1.0,1.5,2.0
