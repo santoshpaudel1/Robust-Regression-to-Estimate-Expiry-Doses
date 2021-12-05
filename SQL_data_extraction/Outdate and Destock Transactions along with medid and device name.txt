@@ -1,0 +1,75 @@
+/******************************* Outdate AND Destock Transactions along with medid AND device name ****************/
+DROP TABLE IF Exists swan.sp_Outdate_Destock_Tranx20200101_20210301_3 Purge;
+CREATE Table swan.sp_Outdate_Destock_Tranx20200101_20210301_3 as
+SELECT 
+	itemtransactionkey,
+	a.skclientkey,
+	itemtransactionrootkey,
+	transactionsessionkey,
+	itemtransactiontypekey,
+	txtimekey,
+	a.itemrootkey,
+	a.itemkey,
+	medkey,
+	meditemrootkey,
+	meditemkey,
+	medfullname,
+	a.dispensingdevicerootkey as device_naturalkey,
+	a.dispensingdevicekey,
+	storagespacerootkey,
+	storagespacekey,
+	storagespaceitemrootkey,
+	storagespaceitemkey,
+	storagespaceshortname,
+	storagespaceabbreviatedname,
+	transactionlocaldatetime,
+	cancelflag,
+	startstoragespaceinventoryquantity,
+	endstoragespaceinventoryquantity,
+	estransactiontypekey,
+	legacytransactiontypekey,
+	ismeddeviceexclude,
+	a.ismedexclude,
+	a.isdeviceexclude,
+	transactionquantity,
+	actualbegincount,
+	a.hdp_shardid,
+	c.itemid as medid,
+	dd.dispensingdevicename
+FROM mkp_es.itemtransaction a
+--Inserted 142634 row(s) 10550
+--Inserted 25781 row(s) 12310
+
+INNER JOIN mkp_es.item c ON
+        c.itemrootkey = a.itemrootkey
+    AND c.skclientkey = a.skclientkey
+    AND c.hdp_shardid = a.hdp_shardid
+	AND c.meditemflag = 1 --make sure it is a drug item
+    AND c.endlocaldatetime IS NULL
+--Inserted 142634 row(s) 10550
+--Inserted 25781 row(s) 12310
+
+Inner JOIN mkp_es.dispensingdevice dd
+    ON dd.dispensingdevicerootkey = a.dispensingdevicerootkey
+    AND dd.skclientkey = a.skclientkey
+    AND dd.hdp_shardid = a.hdp_shardid
+    AND dd.endlocaldatetime IS NULL
+--Inserted 142634 row(s) 10550
+--Inserted 25781 row(s) 12310
+
+where 
+        a.skclientkey in (10312)
+
+    and cast(transactionlocaldatetime as TIMESTAMP) >= cast('2020-03-01' as TIMESTAMP)
+    and cast(transactionlocaldatetime as TIMESTAMP) <= cast('2021-05-31' as TIMESTAMP)
+    and legacytransactiontypekey in (13,502) -- pulling Outdate (13) and Destock (502) transaction types
+    and transactionquantity > 0 -- to pull inventory decrement transactions only
+    and startstoragespaceinventoryquantity - endstoragespaceinventoryquantity = transactionquantity -- to dropped the messed up transactions
+    and cancelflag = 0
+;
+
+--10312:Rockledge Regional Medical Center --> shard = 24
+
+
+/ ***** The transcation table form above code *********/
+select * from swan.sp_outdate_destock_tranx20200101_20210301_3

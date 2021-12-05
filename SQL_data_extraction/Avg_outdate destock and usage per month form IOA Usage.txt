@@ -1,0 +1,44 @@
+/*************************** Outdate, Destock and usage per month from IOA Usage ************************/
+drop table if exists swan.sa_outdate_destock_usage purge;
+Create table swan.sa_outdate_destock_usage as
+select u.hdp_shardid
+		, u.clientkey
+        , u.medkey
+        , med.medid
+		, d.devicename
+		, d.naturalkey as device_naturalkey
+        , max(med.iscontrolledmed) as iscontrolledmed
+        , min(med.isactive) as isactive --min to see if it is unloaded during the month
+        , max(med.ismedexcluded) as ismedexcluded
+        , max(med.isshortageexcluded) as isshortageexcluded
+        , round(u.datekey/100) as year_month
+        , sum(u.usagedoses)/30 as avgdailyusage30
+        , sum(u.usage) as usage_count30
+        , min(u.datekey) as MinUsagedateKey
+		, max(u.datekey) as MaxUsagedateKey
+        , count(*) as number_of_activedays
+from ioa.vw_usage u--ioa.usage u --
+inner join ioa.med med on
+	u.hdp_shardid = med.hdp_shardid
+    and u.clientkey = med.clientkey
+    and u.medkey = med.medkey
+inner join ioa.Device d
+	ON 	u.hdp_shardid = d.hdp_shardid
+    and d.DeviceKey = u.DeviceKey
+	and u.hdp_shardid = d.hdp_shardid
+where u.clientkey in (10132)
+and u.sourcesystemkey = 2 --only Pyxis es
+and round(u.datekey/100) >= 202002 and round(u.datekey/100)<=202105
+group by
+		u.hdp_shardid
+		, u.clientkey
+        , u.medkey
+        , med.medid
+		, d.devicename
+		, d.naturalkey
+		, round(u.datekey/100);
+
+
+/*********** call the table***************/
+
+select * from sa_outdate_destock_usage

@@ -1,0 +1,69 @@
+/************************Get all IOA-active facilities *************************/
+Drop Table If Exists swan.sa_IOA_active_facilities_idn purge;
+CREATE TABLE swan.sa_IOA_active_facilities_idn as
+SELECT 
+	idn.name as idn_name
+	, c.* 
+	from mkp_shared.dimclient c
+inner join mkp_shared.dimidn idn ON
+	idn.skidnkey = c.skidnkey
+where ismaenabled = 1;
+
+/************************Get all unit cost *************************/
+Drop Table If Exists swan.tmp_unique_cost purge;
+CREATE TABLE swan.tmp_unique_cost as
+SELECT 
+       clientkey
+     , medid
+     , lastmodifieddatetime
+     , unitcost
+     , hdp_shardid
+     , sourcesystemkey 
+FROM
+    (SELECT    
+          clientkey
+        , medid
+        , lastmodifieddatetime
+        , unitcost
+        , hdp_shardid 
+        , sourcesystemkey 
+        , ROW_NUMBER() OVER (PARTITION BY 
+                                  clientkey
+                                , sourcesystemkey
+                                , hdp_shardid
+                                , medid ORDER BY lastmodifieddatetime DESC) as med_rank
+                                
+        
+    FROM ioa.UnitCostAlgorithm
+    WHERE unitcost IS NOT NULL) ranked
+	INNER JOIN swan.sa_IOA_active_facilities IAF 
+		ON IAF.SkClientKey = ClientKey			
+	WHERE med_rank <= 1
+	AND sourcesystemkey = 2
+		ORDER BY 
+			ClientKey
+		  , SourceSystemKey
+		  , medid
+	      , hdp_shardid
+	      , lastmodifieddatetime;
+--1,152,129
+-- 18,401 (10550,12310)
+-- 14,336 (10550)
+-- 4,065 (12310)
+/************************Add medkey to the table *************************/
+Drop Table If Exists swan.tmp_unique_cost_medkey purge;
+CREATE TABLE swan.tmp_unique_cost_medkey as
+select c.*
+    ,   m.medkey
+from swan.tmp_unique_cost c
+INNER JOIN ioa.med m
+ON c.hdp_shardid = m.hdp_shardid
+    and c.clientkey = m.clientkey
+    and c.sourcesystemkey = m.sourcesystemkey
+    and c.medid = m.medid;
+--1,334,615
+--31,327 (10550,12310)
+--27,262 (10550)
+-- 4,065 (12310)
+/************Select the tabble***********************/
+select * from swan.tmp_unique_cost_medkey where clientkey=10312

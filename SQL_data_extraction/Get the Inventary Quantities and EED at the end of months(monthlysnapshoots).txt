@@ -1,0 +1,68 @@
+/************************Get all IOA-active facilities *************************/
+Drop Table If Exists swan.sp_IOA_active_facilities_idn purge;
+CREATE TABLE swan.sp_IOA_active_facilities_idn as
+SELECT idn.name as idn_name
+	, c.* 
+	from mkp_shared.dimclient c
+inner join mkp_shared.dimidn idn ON
+	idn.skidnkey = c.skidnkey
+where ismaenabled = 1;
+
+/************************Get the Inventory Quantities of all IOA-active facilities at the end of months*************************/
+
+Drop Table If Exists swan.sp_IQ_LD_ALL purge;
+CREATE TABLE swan.sp_IQ_LD_All as
+SELECT a.skclientkey
+	, a.hdp_shardid
+	, a.sktimekeyeffmonth as lastday_of_month
+	, c.itemid as medid-- equivalent to medid in ioa DB
+	, dd.dispensingdevicename
+	, dd.devicetypekey
+	, c.meditemflag
+	, a.dispensingdevicerootkey as device_naturalkey
+	, if(sum(a.isinactive) = 0, 0,if(sum(a.isinactive) = count(a.isinactive), 1,2)) as isinactive -- if not unloaded: 0, if fully unloaded: 1, if partially uploaded 2
+	, sum(a.cur) as inventoryquantity
+	, min(a.expireitemtimekey) as earliestnextexpirationdate
+	, max(a.standardstockwithindispensingdeviceflag) as standardstockwithindispensingdeviceflag
+	, sum(a.max) as max_par_level
+	, sum(a.min) as min_par_level
+FROM mkp_es.PocketMonthlySnapShot a
+
+INNER JOIN swan.sp_ioa_active_facilities_idn iaf
+	ON iaf.skclientkey = a.skclientkey
+--Inserted 117047981 row(s)
+
+INNER JOIN mkp_es.item c
+    ON c.itemrootkey = a.itemrootkey
+    AND c.skclientkey = a.skclientkey
+    AND c.hdp_shardid = a.hdp_shardid
+    AND c.endlocaldatetime IS NULL
+--Inserted 117047981 row(s)
+
+LEFT JOIN mkp_es.dispensingdevice dd
+    ON dd.dispensingdevicerootkey = a.dispensingdevicerootkey
+    AND dd.skclientkey = a.skclientkey
+    AND dd.hdp_shardid = a.hdp_shardid
+    AND dd.endlocaldatetime IS NULL
+--Inserted 117047981 row(s)
+WHERE sktimekeyeffmonth >20200228
+AND sktimekeyeffmonth <20210531
+GROUP BY
+	a.skclientkey
+	, a.hdp_shardid
+	, a.sktimekeyeffmonth
+    , c.itemid
+    , c.meditemflag
+	, dd.dispensingdevicename
+	, dd.devicetypekey
+	, a.dispensingdevicerootkey
+;
+--Inserted 96,784,898 row(s)
+--Inserted 31,954,140 row(s) since 2020 to 2021 feb
+--Inserted 31, 954,140 row(s)
+--Inserted 31,954,141 row(s)
+
+
+/***Get the created table for this skclientkey******/
+
+SELECT * from swan.sp_iq_ld_all where skclientkey=10312
