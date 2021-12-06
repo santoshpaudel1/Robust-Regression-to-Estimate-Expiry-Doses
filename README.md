@@ -1,5 +1,5 @@
 # Robust-Regression-to-Estimate-Expiry-Doses
-
+## Introduction
 **Robust-Regression-to-Estimate-Expiry-Medicine-Doses* implements ML algorithm to estimate the doses that will expire over fixed date (30, 60, 90, 120 )days for a given medicine in a medstation(Pyxis device). In previous linear regression result was far away form ground truth. Due to the spairsity present in removal counts in pockets, my contribution on this project is to replace the original linear regression by robust reggression (Hubers) mothod in order to take a consideration of the sparsity (inconsistency) so that the prediction by regression method is more closer to the ground truth.
 In this project:
 - Robust linear regression (Huber’s) method on big data environment (IOA/MKP
