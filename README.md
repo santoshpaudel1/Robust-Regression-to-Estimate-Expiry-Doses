@@ -11,29 +11,10 @@ hospital database).
 
 ## Training/ Testing Datasets
 The IOA/ MKP database is used for datasets. The data are stored in distributed database n MPP data platform (Impala). The SQL querry used  for data extraction, feature engineering is in seperate folder "SQL_data_extraction" of the project
-## Installation Instruction
+## Installation/ Run Instruction
 
-### Window 
-1. conda create -n test python=3.6.7 pip
-2. conda activate test
-3. pip3 install -r requirements.txt (All reqiured packages are listed on requirements text file)
-	```scikit-learn==0.23.0
-	flask==1.0.2, scikit-learn==0.23.0,numpy==1.18.1, pandas==1.1.4, matplotlib==3.0.2...
-
-4. go the project main folder (CKD_project) directory 
-	```bash
-	$> cd. ...\CKD_project_file\CKD_project
-	```
-5. train the model (train/test results will be saved in respective folder) 
-	```bash
-	$> ...\CKD_project_file\CKD_project>python train_model.py
-	```
-6. run python main.py 
-	```bash
-	$> ...\CKD_project_file\CKD_project>python main.py
-	```
-7. open  http://localhost:8080/
-8. enter the features input on web API and press 'predict' button 
+1. Go to the directory of the project folder
+2. Run python STE_script.py data/ results/ 2
 
 	
  ## Folder Structure Conventions
@@ -41,27 +22,15 @@ The IOA/ MKP database is used for datasets. The data are stored in distributed d
 #### A top-level directory layout
 
 ```
-├── input
-│   ├── data                      # raw data
-│   └── processed_data            # processed and semiprocessed data for feaures extraction
-├── model                         # contain files related trained/ tested model in .pkl and .csv form
+├── SQL_data_extraction               # contain SQL queries for input data preparation and features extraction
+│             
+├── STE_notebook_code                 # Preprocess, implementation of Robust Hubers Regression in Jupyter notebook       
 │
-├── templates                     # flask/ HTLM templetes for UI
-│   ├── form.html
-│   │── main.html
-│   │── result.html
-│
-├── utility_func                 # functions for data preprocessing, training and testing 
-│   ├── preprocessing.py
-│   └── utility.py
-│
-├──CKD_train_model.ipynb         # premilinary analysis and data pre preprocessing in jupyter notebook
-│
-├── main.py                      # main code to run the saved trained model and UI 
-│
-├── train_model.py               # trained the model and save it for main code
-    
+├── STE_python_code                   # Implement Robust Hubers Regression in python 
+│   ├── data                          # Input datasets
+│   │── results                       # Folder to save the results for each hospital sites
+│   │── STE_hybrid_funcs.py           # List of all functions used for the prediction (training/ testing)
+    │── STE_hybrid_utilities.py       # Function for display results (.csv format), box plots for each sites
+    │── STE_script.py                 # Main code for training and testing for all sites
  
-## Reference
--I used some format for html API from https://github.com/venkata-sreeram/Chronic-Kidney-Disease-Prediction
 
