@@ -5,7 +5,7 @@ In this project:
 - Robust linear regression (Huber’s) method on big data environment (IOA/MKP
 hospital database).
 - Compare the estimation accuracy with respect to original statistical method (heuristic method) and previous estimation method by using linear regression. 
-- -  Results shows that prediction accuracy improved by at least 4.5% as compared to original regression model and at least
+- Results shows that prediction accuracy improved by at least 4.5% as compared to original regression model and at least
 10% as compared to heuristic model (Test/ Validation on 43 different hospital pharmacy sites).
 
 
