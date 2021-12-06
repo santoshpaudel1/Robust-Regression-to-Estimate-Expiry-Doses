@@ -24,7 +24,7 @@ The IOA/ MKP database is used for datasets. The data are stored in distributed d
 ```
 ├── SQL_data_extraction               # contain SQL queries for input data preparation and features extraction
 │             
-├── STE_notebook_code                 # Preprocess, implementation of Robust Hubers Regression in Jupyter notebook       
+├── STE_notebook_code                 # Preprocess, feature extract and implement of Robust Hubers Regression in Jupyter notebook       
 │
 ├── STE_python_code                   # Implement Robust Hubers Regression in python 
 │   ├── data                          # Input datasets
