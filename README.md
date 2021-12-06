@@ -27,9 +27,9 @@ The IOA/ MKP database is used for datasets. The data are stored in distributed d
 ├── STE_notebook_code                 # Preprocess, feature extract and implement of Robust Hubers Regression in Jupyter notebook       
 │
 ├── STE_python_code                   # Implement Robust Hubers Regression in python 
-│   ├── data                          # Input datasets
-│   │── results                       # Folder to save the results for each hospital sites
-│   │── STE_hybrid_funcs.py           # List of all functions used for the prediction (training/ testing)
+    ├── data                          # Input datasets
+    │── results                       # Folder to save the results for each hospital sites
+    │── STE_hybrid_funcs.py           # List of all functions used for the prediction (training/ testing)
     │── STE_hybrid_utilities.py       # Function for display results (.csv format), box plots for each sites
     │── STE_script.py                 # Main code for training and testing for all sites
  
