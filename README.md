@@ -9,7 +9,8 @@ hospital database).
 10% as compared to heuristic model (Test/ Validation on 43 different hospital pharmacy sites).
 
 
-
+## Training/ Testing Datasets
+The IOA/ MKP database is used for datasets. The data are stored in distributed database n MPP data platform (Impala). The SQL querry used  for data extraction, feature engineering is in seperate folder "SQL_data_extraction" of the project
 ## Installation Instruction
 
 ### Window 
