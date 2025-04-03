@@ -1,0 +1,25 @@
+from skimage.measure import label
+import numpy as np
+
+def getConnectedComponents(segmentation):
+    """
+    Get all connected components in the segmentation, sorted by size.
+    
+    Parameters:
+    segmentation (numpy.ndarray): Segmentation image.
+    
+    Returns:
+    dict: Dictionary of connected components sorted by size.
+    """
+    labels = label(segmentation)
+    component_sizes = np.bincount(labels.ravel())
+    sorted_components = np.argsort(component_sizes)[::-1]  # Sort components from largest to smallest
+    sorted_components = sorted_components[sorted_components != 0]  # Exclude background label (0)
+    
+    connected_components = {}
+    for i, component in enumerate(sorted_components):
+        mask = labels == component
+        if np.any(mask):
+            connected_components[i] = mask
+    
+    return connected_components
