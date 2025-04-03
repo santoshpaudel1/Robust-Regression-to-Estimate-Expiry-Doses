@@ -102,3 +102,870 @@ for i, component_id in enumerate(sorted_labels):
     
     # Optional: Clear memory if processing many components
     del mask
+
+
+
+
+
+################################################ all function ############################################################################################
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+from skimage.morphology import skeletonize
+from sklearn.cluster import DBSCAN
+import networkx as nx
+from skimage.util import img_as_bool
+import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.cluster import DBSCAN
+from collections import defaultdict
+import time
+import bisect
+from rtree import index
+from scipy.spatial import cKDTree
+%matplotlib qt 
+
+def adaptive_thresholding(M1_sample, threshold):
+    """
+    Apply adaptive thresholding to the input image.
+    
+    Parameters:
+    M1_sample (numpy.ndarray): Input image.
+    
+    Returns:
+    numpy.ndarray: Thresholded binary image.
+    """
+    median_pixel = np.median(M1_sample)
+    for i in range(0, 140, 10):
+        ret, thresh_metal_lines_M1 = cv2.threshold(M1_sample, median_pixel - i, 255, cv2.THRESH_BINARY)
+        high_intensity_pixel_gt_one_percent = thresh_metal_lines_M1.sum() / (M1_sample.shape[0] * M1_sample.shape[1] * 255) * 100
+        if high_intensity_pixel_gt_one_percent > threshold:
+            break
+    return thresh_metal_lines_M1
+
+def skeletonize_image(binary_img):
+    """
+    Apply skeletonization to the binary image.
+    
+    Parameters:
+    binary_img (numpy.ndarray): Binary image.
+    
+    Returns:
+    numpy.ndarray: Skeletonized image.
+    """
+    skeleton = skeletonize(binary_img, method='lee')
+    return (skeleton * 255).astype(np.uint8)
+
+def extract_line_segments(skeleton_uint8):
+    """
+    Extract line segments from the skeletonized image.
+    
+    Parameters:
+    skeleton_uint8 (numpy.ndarray): Skeletonized image.
+    
+    Returns:
+    list: List of line segments.
+    """
+    contours, _ = cv2.findContours(skeleton_uint8, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    line_segments = []
+    label_counter = 1
+    for contour in contours:
+        for i in range(len(contour) - 1):
+            x1, y1 = contour[i][0]
+            x2, y2 = contour[i + 1][0]
+            line_segments.append({'label': label_counter, 'start': (x1, y1), 'end': (x2, y2)})
+            label_counter += 1
+    return line_segments
+
+def snap_to_axis(line):
+    """
+    Snap the line to the nearest axis (horizontal or vertical).
+    
+    Parameters:
+    line (list): Line coordinates [x1, y1, x2, y2].
+    
+    Returns:
+    list: Snapped line coordinates [x1, y1, x2, y2].
+    """
+    x1, y1, x2, y2 = line
+    if abs(y1 - y2) < abs(x1 - x2):  # Horizontal line
+        y2 = y1
+    elif abs(x1 - x2) < abs(y1 - y2):  # Vertical line
+        x2 = x1
+    return [x1, y1, x2, y2]
+
+def assign_line_ids(line_segments):
+    """
+    Assign unique IDs to each line segment and categorize them.
+    
+    Parameters:
+    line_segments (list): List of line segments.
+    
+    Returns:
+    tuple: Dictionaries and lists of line segments and their IDs.
+    """
+    line_dict_M1 = {}
+    coordinates_dict_M1 = {}
+    horizontal_lines_ids = []
+    vertical_lines_ids = []
+    neither_vertical_nor_horizontal_lines_ids = []
+
+    for idx, segment in enumerate(line_segments):
+        x1, y1 = segment['start']
+        x2, y2 = segment['end']
+        snapped_line = snap_to_axis([x1, y1, x2, y2])
+        line_dict_M1[idx] = snapped_line
+        coordinates_dict_M1[idx] = {'start': (x1, y1), 'end': (x2, y2)}
+        if snapped_line[1] == snapped_line[3]:  # Horizontal line
+            horizontal_lines_ids.append(idx)
+        elif snapped_line[0] == snapped_line[2]:  # Vertical line
+            vertical_lines_ids.append(idx)
+        else:  # Neither vertical nor horizontal line
+            neither_vertical_nor_horizontal_lines_ids.append(idx)
+
+    return line_dict_M1, coordinates_dict_M1, horizontal_lines_ids, vertical_lines_ids
+
+def create_dataframe(line_dict, line_ids):
+    """
+    Create a DataFrame from the selected lines.
+    
+    Parameters:
+    line_dict (dict): Dictionary of line segments.
+    line_ids (list): List of line IDs.
+    
+    Returns:
+    pandas.DataFrame: DataFrame of selected lines.
+    """
+    selected_lines_data = []
+    for idx in line_ids:
+        if idx in line_dict:
+            line = line_dict[idx]
+            x1, y1, x2, y2 = line
+            selected_lines_data.append({'ID': idx, 'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
+    return pd.DataFrame(selected_lines_data)
+
+
+# # Grouping logic using DBSCAN and a graph-based approach
+# def group_lines(df, eps_primary=2, eps_secondary=4, min_samples=1, primary_axis='y'):
+#     if primary_axis == 'y':
+#         primary_coords = df[['y1', 'y2']].mean(axis=1).values.reshape(-1, 1)
+#         secondary_coords = np.vstack((df['x1'].values, df['x2'].values)).T
+#     else:
+#         primary_coords = df[['x1', 'x2']].mean(axis=1).values.reshape(-1, 1)
+#         secondary_coords = np.vstack((df['y1'].values, df['y2'].values)).T
+    
+#     primary_clustering = DBSCAN(eps=eps_primary, min_samples=min_samples).fit(primary_coords)
+#     df['primary_group'] = primary_clustering.labels_
+    
+#     df['group'] = -1
+#     current_group = 0
+    
+#     for primary_group in np.unique(df['primary_group']):
+#         if primary_group == -1:
+#             continue
+#         group_df = df[df['primary_group'] == primary_group]
+#         if len(group_df) > 1:
+#             G = nx.Graph()
+#             for i, (coord1, coord2) in enumerate(secondary_coords[group_df.index]):
+#                 G.add_node(i, coord1=coord1, coord2=coord2)
+            
+#             for i in range(len(group_df)):
+#                 for j in range(i + 1, len(group_df)):
+#                     if abs(secondary_coords[group_df.index[i]][0] - secondary_coords[group_df.index[j]][1]) <= eps_secondary or abs(secondary_coords[group_df.index[i]][1] - secondary_coords[group_df.index[j]][0]) <= eps_secondary:
+#                         G.add_edge(i, j)
+            
+#             components = list(nx.connected_components(G))
+#             for component in components:
+#                 for idx in component:
+#                     df.loc[group_df.index[idx], 'group'] = current_group
+#                 current_group += 1
+#         else:
+#             df.loc[group_df.index, 'group'] = current_group
+#             current_group += 1
+    
+#     return df
+
+def group_lines(df, eps_primary=2, eps_secondary=3, min_samples=1, primary_axis='y'):
+    """
+    Group lines using DBSCAN clustering and a graph-based approach.
+    
+    Parameters:
+    df (pandas.DataFrame): DataFrame of lines.
+    eps_primary (float): DBSCAN epsilon for primary axis.
+    eps_secondary (float): DBSCAN epsilon for secondary axis.
+    min_samples (int): Minimum samples for DBSCAN.
+    primary_axis (str): Primary axis for grouping ('y' or 'x').
+    
+    Returns:
+    pandas.DataFrame: DataFrame with grouped lines.
+    """
+    if df.empty:
+        return df
+        
+    if primary_axis == 'y':
+        primary_coords = df[['y1', 'y2']].mean(axis=1).values.reshape(-1, 1)
+        secondary_coords = np.vstack((df['x1'].values, df['x2'].values)).T
+    else:
+        primary_coords = df[['x1', 'x2']].mean(axis=1).values.reshape(-1, 1)
+        secondary_coords = np.vstack((df['y1'].values, df['y2'].values)).T
+    
+    primary_clustering = DBSCAN(eps=eps_primary, min_samples=min_samples).fit(primary_coords)
+    df['primary_group'] = primary_clustering.labels_
+    
+    df['group'] = -1
+    current_group = 0
+    
+    for primary_group in np.unique(df['primary_group']):
+        if primary_group == -1:
+            continue
+        group_df = df[df['primary_group'] == primary_group]
+        if len(group_df) > 1:
+            G = nx.Graph()
+            for i, (coord1, coord2) in enumerate(secondary_coords[group_df.index]):
+                G.add_node(i, coord1=coord1, coord2=coord2)
+            
+            for i in range(len(group_df)):
+                for j in range(i + 1, len(group_df)):
+                    if abs(secondary_coords[group_df.index[i]][0] - secondary_coords[group_df.index[j]][1]) <= eps_secondary or abs(secondary_coords[group_df.index[i]][1] - secondary_coords[group_df.index[j]][0]) <= eps_secondary:
+                        G.add_edge(i, j)
+            
+            components = list(nx.connected_components(G))
+            for component in components:
+                for idx in component:
+                    df.loc[group_df.index[idx], 'group'] = current_group
+                current_group += 1
+        else:
+            df.loc[group_df.index, 'group'] = current_group
+            current_group += 1
+    
+    return df
+
+ 
+
+def replace_lines_with_group(df, primary_axis='y'):
+    """
+    Replace lines with a single line per group.
+    
+    Parameters:
+    df (pandas.DataFrame): DataFrame of grouped lines.
+    primary_axis (str): Primary axis for grouping ('y' or 'x').
+    
+    Returns:
+    list: List of new lines.
+    """
+    new_lines = []
+    if df.empty:
+        return new_lines
+        
+    for group in df['group'].unique():
+        group_df = df[df['group'] == group]
+        if primary_axis == 'y':
+            min_coord = group_df[['x1', 'x2']].min().min()
+            max_coord = group_df[['x1', 'x2']].max().max()
+            avg_coord = group_df[['y1', 'y2']].mean().mean()
+            new_lines.append([min_coord, avg_coord, max_coord, avg_coord])
+        else:
+            min_coord = group_df[['y1', 'y2']].min().min()
+            max_coord = group_df[['y1', 'y2']].max().max()
+            avg_coord = group_df[['x1', 'x2']].mean().mean()
+            new_lines.append([avg_coord, min_coord, avg_coord, max_coord])
+    return new_lines
+
+def group_lines_I(df, primary_axis='y', pixel_offset=2):
+    """
+    Group lines that:
+    - Have primary coordinates within `pixel_offset` of each other.
+    - Overlap or touch on the secondary axis.
+    """
+    # Extract primary and secondary coordinates
+    if primary_axis == 'y':
+        primary_coords = df[['y1', 'y2']].mean(axis=1).values.reshape(-1, 1)
+        secondary_coords = np.vstack((df['x1'].values, df['x2'].values)).T
+    else:
+        primary_coords = df[['x1', 'x2']].mean(axis=1).values.reshape(-1, 1)
+        secondary_coords = np.vstack((df['y1'].values, df['y2'].values)).T
+   
+    df['group'] = -1
+    current_group = 0
+
+    # Create a KD-tree for efficient neighbor search
+    tree = KDTree(primary_coords)
+    neighbors = tree.query_radius(primary_coords, r=pixel_offset)
+
+    # Create a graph to group lines with primary coordinates within `pixel_offset`
+    G = nx.Graph()
+    for i, neighbor_indices in enumerate(neighbors):
+        G.add_node(i, primary_coord=primary_coords[i][0])
+        for j in neighbor_indices:
+            if i != j:
+                G.add_edge(i, j)
+   
+    # Assign group IDs based on connected components
+    components = list(nx.connected_components(G))
+    for component in components:
+        group_df = df.iloc[list(component)]
+        if len(group_df) > 1:
+            # Check for overlap/touch on the secondary axis
+            G_secondary = nx.Graph()
+            for i, idx in enumerate(group_df.index):
+                coord1, coord2 = secondary_coords[idx]
+                sorted_coords = sorted([coord1, coord2])
+                G_secondary.add_node(i, start=sorted_coords[0], end=sorted_coords[1])
+           
+            for i in range(len(group_df)):
+                for j in range(i + 1, len(group_df)):
+                    node_i = G_secondary.nodes[i]
+                    node_j = G_secondary.nodes[j]
+                    if (node_i['start'] <= node_j['end'] and
+                        node_j['start'] <= node_i['end']):
+                        G_secondary.add_edge(i, j)
+           
+            # Assign group IDs
+            secondary_components = list(nx.connected_components(G_secondary))
+            for component in secondary_components:
+                for idx in component:
+                    df.loc[group_df.index[idx], 'group'] = current_group
+                current_group += 1
+        else:
+            df.loc[group_df.index, 'group'] = current_group
+            current_group += 1
+
+    return df
+
+
+
+def extend_vertical_lines_to_touch_horizontal(new_lines_vertical, new_lines_horizontal, max_gap=8):
+    """
+    Extend vertical lines to touch horizontal lines.
+    
+    Parameters:
+    new_lines_vertical (list): List of vertical lines.
+    new_lines_horizontal (list): List of horizontal lines.
+    max_gap (int): Maximum gap to extend lines.
+    
+    Returns:
+    list: List of extended vertical lines.
+    """
+    extended_lines_vertical = []
+    for v_line in new_lines_vertical:
+        x1, y1, x2, y2 = v_line
+        closest_h_line_above = [h_line for h_line in new_lines_horizontal if h_line[1] < y1 and abs(y1 - h_line[1]) <= max_gap]
+        closest_h_line_below = [h_line for h_line in new_lines_horizontal if h_line[1] > y2 and abs(h_line[1] - y2) <= max_gap]
+        
+        if closest_h_line_above:
+            closest_above_y = max(closest_h_line_above, key=lambda h: h[1])[1]
+            y1 = closest_above_y
+        
+        if closest_h_line_below:
+            closest_below_y = min(closest_h_line_below, key=lambda h: h[1])[1]
+            y2 = closest_below_y
+        
+        extended_lines_vertical.append([x1, y1, x2, y2])
+    return extended_lines_vertical
+
+def extend_horizontal_lines_to_touch_vertical(new_lines_horizontal, new_lines_vertical, max_gap=8):
+    
+    extended_lines_horizontal = []
+    for h_line in new_lines_horizontal:
+        x1, y1, x2, y2 = h_line
+        # Check the end points of the horizontal line and find the closest vertical lines within the max_gap distance
+        closest_v_line_left = [v_line for v_line in new_lines_vertical if v_line[0] < x1 and abs(x1 - v_line[0]) <= max_gap]
+        closest_v_line_right = [v_line for v_line in new_lines_vertical if v_line[0] > x2 and abs(v_line[0] - x2) <= max_gap]
+        
+        if closest_v_line_left:
+            closest_left_x = max(closest_v_line_left, key=lambda v: v[0])[0]
+            x1 = closest_left_x
+        
+        if closest_v_line_right:
+            closest_right_x = min(closest_v_line_right, key=lambda v: v[0])[0]
+            x2 = closest_right_x
+        extended_lines_horizontal.append([x1, y1, x2, y2])
+    return extended_lines_horizontal
+
+
+
+def find_crossing_points(vertical_lines, horizontal_lines):
+    """
+    Find crossing points for vertical lines.
+    
+    Parameters:
+    vertical_lines (pandas.DataFrame): DataFrame of vertical lines.
+    horizontal_lines (pandas.DataFrame): DataFrame of horizontal lines.
+    
+    Returns:
+    dict: Dictionary of crossing points.
+    """
+    crossing_points = {}
+    for v_idx, v_line in vertical_lines.iterrows():
+        v_x = v_line['x1']
+        v_y1 = v_line['y1']
+        v_y2 = v_line['y2']
+        crossings = []
+        for h_idx, h_line in horizontal_lines.iterrows():
+            h_y = h_line['y1']
+            h_x1 = h_line['x1']
+            h_x2 = h_line['x2']
+            if h_x1 <= v_x <= h_x2 and v_y1 <= h_y <= v_y2:
+                crossings.append((v_x, h_y))
+        crossing_points[v_idx] = sorted(crossings, key=lambda p: p[1])
+    return crossing_points
+
+def split_vertical_lines(vertical_lines, crossing_points):
+    """
+    Split vertical lines at crossing points.
+    
+    Parameters:
+    vertical_lines (pandas.DataFrame): DataFrame of vertical lines.
+    crossing_points (dict): Dictionary of crossing points.
+    
+    Returns:
+    list: List of split vertical lines.
+    """
+    new_vertical_lines = []
+    for v_idx, v_line in vertical_lines.iterrows():
+        v_start = (v_line['x1'], v_line['y1'])
+        v_end = (v_line['x2'], v_line['y2'])
+        crossings = crossing_points[v_idx]
+        if crossings:
+            current_start = v_start
+            for crossing in crossings:
+                new_vertical_lines.append({'start': current_start, 'end': crossing})
+                current_start = crossing
+            new_vertical_lines.append({'start': current_start, 'end': v_end})
+        else:
+            new_vertical_lines.append({'start': v_start, 'end': v_end})
+    return new_vertical_lines
+
+def plot_split_lines(split_lines, color, shape):
+    """
+    Plot the split vertical lines.
+    
+    Parameters:
+    split_lines (list): List of split vertical lines.
+    color (tuple): Color for the lines.
+    shape (tuple): Shape of the image.
+    
+    Returns:
+    numpy.ndarray: Image with plotted lines.
+    """
+    split_lines_image = np.zeros((*shape, 3), dtype=np.uint8)
+    for line in split_lines:
+        x1, y1, x2, y2 = line['x1'], line['y1'], line['x2'], line['y2']
+        cv2.line(split_lines_image, (int(x1), int(y1)), (int(x2), int(y2)), color, 1)
+    return split_lines_image
+
+def plot_new_lines(new_lines, color, shape):
+    """
+    Plot the new horizontal and vertical lines.
+    
+    Parameters:
+    new_lines (list): List of new lines.
+    color (tuple): Color for the lines.
+    shape (tuple): Shape of the image.
+    
+    Returns:
+    numpy.ndarray: Image with plotted lines.
+    """
+    new_lines_image = np.zeros((*shape, 3), dtype=np.uint8)
+    for line in new_lines:
+        x1, y1, x2, y2 = line
+        cv2.line(new_lines_image, (int(x1), int(y1)), (int(x2), int(y2)), color, 1)
+    return new_lines_image
+
+
+from skimage.measure import label
+import numpy as np
+
+# def getConnectedComponents(segmentation):
+#     """
+#     Get all connected components in the segmentation, sorted by size.
+    
+#     Parameters:
+#     segmentation (numpy.ndarray): Segmentation image.
+    
+#     Returns:
+#     dict: Dictionary of connected components sorted by size.
+#     """
+#     labels = label(segmentation)
+#     component_sizes = np.bincount(labels.ravel())
+#     sorted_components = np.argsort(component_sizes)[::-1]  # Sort components from largest to smallest
+#     sorted_components = sorted_components[sorted_components != 0]  # Exclude background label (0)
+#     connected_components = {i: labels == component for i, component in enumerate(sorted_components)}
+#     return connected_components
+
+from skimage.measure import label
+import numpy as np
+
+def getConnectedComponents(segmentation):
+    """
+    Get all connected components in the segmentation, sorted by size.
+    
+    Parameters:
+    segmentation (numpy.ndarray): Segmentation image.
+    
+    Returns:
+    dict: Dictionary of connected components sorted by size.
+    """
+    labels = label(segmentation)
+    component_sizes = np.bincount(labels.ravel())
+    sorted_components = np.argsort(component_sizes)[::-1]  # Sort components from largest to smallest
+    sorted_components = sorted_components[sorted_components != 0]  # Exclude background label (0)
+    
+    connected_components = {}
+    for i, component in enumerate(sorted_components):
+        mask = labels == component
+        if np.any(mask):
+            connected_components[i] = mask
+    
+    return connected_components
+
+
+
+
+
+# def process_image_with_sliding_window(image, window_size=600, step_size=600, overlap=0):
+#     """
+#     Process the entire image using a sliding window approach.
+    
+#     Parameters:
+#     image (numpy.ndarray): Input image.
+#     window_size (int): Size of the sliding window.
+#     step_size (int): Step size for the sliding window.
+#     overlap (int): Overlap between windows.
+    
+#     Returns:
+#     DataFrame: Combined DataFrame of final horizontal and vertical lines.
+#     """
+#     height, width = image.shape[:2]
+#     final_vertical_lines = pd.DataFrame(columns=['x1', 'y1', 'x2', 'y2'])
+#     final_horizontal_lines = pd.DataFrame(columns=['x1', 'y1', 'x2', 'y2'])
+    
+#     for y in range(0, height - window_size + 1, window_size - overlap):
+#         for x in range(0, width - window_size + 1, window_size - overlap):
+#             window = image[y:y + window_size, x:x + window_size]
+#             thresh_metal_lines_M1 = adaptive_thresholding(window)
+#             binary_img = img_as_bool(thresh_metal_lines_M1)
+#             skeleton_uint8 = skeletonize_image(binary_img)
+#             line_segments = extract_line_segments(skeleton_uint8)
+#             line_dict_M1, coordinates_dict_M1, horizontal_lines_ids, vertical_lines_ids = assign_line_ids(line_segments)
+#             df_selected_lines_horizontal = create_dataframe(line_dict_M1, horizontal_lines_ids)
+#             df_selected_lines_vertical = create_dataframe(line_dict_M1, vertical_lines_ids)
+#             df_grouped_lines_horizontal = group_lines(df_selected_lines_horizontal.copy(),eps_primary=2, eps_secondary=4, min_samples=1, primary_axis='y')
+#             df_grouped_lines_vertical =  group_lines(df_selected_lines_vertical.copy(),eps_primary=1, eps_secondary=2, min_samples=1, primary_axis='x')
+#             new_lines_horizontal = replace_lines_with_group(df_grouped_lines_horizontal, primary_axis='y')
+#             new_lines_vertical = replace_lines_with_group(df_grouped_lines_vertical, primary_axis='x')
+#             processed_vertical = extend_vertical_lines_to_touch_horizontal(new_lines_vertical, new_lines_horizontal)
+#             processed_horizontal = extend_horizontal_lines_to_touch_vertical(new_lines_horizontal, processed_vertical)
+#             processed_vertical_df = pd.DataFrame(processed_vertical, columns=['x1', 'y1', 'x2', 'y2'])
+#             processed_horizontal_df = pd.DataFrame(processed_horizontal, columns=['x1', 'y1', 'x2', 'y2'])
+#             processed_horizontal_df['x1'] += x
+#             processed_horizontal_df['y1'] += y
+#             processed_horizontal_df['x2'] += x
+#             processed_horizontal_df['y2'] += y
+#             processed_vertical_df['x1'] += x
+#             processed_vertical_df['y1'] += y
+#             processed_vertical_df['x2'] += x
+#             processed_vertical_df['y2'] += y
+#             final_vertical_lines = pd.concat([final_vertical_lines, processed_vertical_df], ignore_index=True)
+#             final_horizontal_lines = pd.concat([final_horizontal_lines, processed_horizontal_df], ignore_index=True)
+    
+#     return final_horizontal_lines, final_vertical_lines
+
+def plot_final_lines(horizontal_lines, vertical_lines, shape):
+    """
+    Plot the final horizontal and vertical lines on the image.
+    
+    Parameters:
+    horizontal_lines (list): List of final horizontal lines.
+    vertical_lines (list): List of final vertical lines.
+    shape (tuple): Shape of the image.
+    
+    Returns:
+    numpy.ndarray: Image with plotted lines.
+    """
+    final_image = np.zeros((*shape, 3), dtype=np.uint8)
+    for _, row in horizontal_lines.iterrows():
+        x1, y1, x2, y2 = row
+        cv2.line(final_image, (int(x1), int(y1)), (int(x2), int(y2)), (0,0,255), 1)
+    for _, row in vertical_lines.iterrows():
+        x1, y1, x2, y2 = row
+        cv2.line(final_image, (int(x1), int(y1)), (int(x2), int(y2)), (255,255,255), 1)
+    return final_image
+
+
+
+def detect_vias(M_sample, threshold_percentage, contour_size):
+    """
+    Detect vias in the given sample metal layer and return the image with vias and their surrounding area filled with white pixels.
+    
+    Parameters:
+    M2_sample (numpy.ndarray): The input sample image.
+    threshold_percentage (float): The percentage threshold to determine high-intensity pixels.
+    contour_size (int): The maximum size of the contours to be detected.
+    
+    Returns:
+    numpy.ndarray: The image with vias and their surrounding area filled with white pixels.
+    list: A list of centroids of the detected vias.
+    """
+    max_pixel = M_sample.max(axis=(0, 1))
+
+    for i in range(0, 100, 10):
+        ret, thresh = cv2.threshold(M_sample, max_pixel - i, 255, cv2.THRESH_BINARY)
+        high_intensity_pixel_gt_one_percent = thresh.sum() / (M_sample.shape[0] * M_sample.shape[1] * 255) * 100
+        if high_intensity_pixel_gt_one_percent > threshold_percentage:
+            break
+
+    kernel = np.ones((3, 3), np.uint8)
+    dilate = cv2.dilate(thresh, kernel, 1)
+
+    contours, hierarchy = cv2.findContours(image=dilate, mode=cv2.RETR_TREE, method=cv2.CHAIN_APPROX_NONE)
+    # Filter contours based on length
+    contours = [cnt for cnt in contours if cv2.arcLength(cnt, True) <= contour_size]
+
+    image_copy = M_sample.copy()
+    cv2.drawContours(image=image_copy, contours=contours, contourIdx=-1, color=(255, 0, 0), thickness=1, lineType=cv2.LINE_AA)
+    
+    # Calculate centroids
+    centroids = []
+    for cnt in contours:
+        M = cv2.moments(cnt)
+        if M["m00"] != 0:
+            cX = int(M["m10"] / M["m00"])
+            cY = int(M["m01"] / M["m00"])
+            centroids.append((cX, cY))
+
+    # Return the image copy and centroids
+    return image_copy, centroids
+
+
+
+def find_crossing_points_optimized(vertical_lines, horizontal_lines):
+    """
+    Find crossing points between vertical and horizontal lines.
+    
+    Parameters:
+    vertical_lines (pd.DataFrame): DataFrame containing vertical lines with columns ['x1', 'y1', 'x2', 'y2'].
+    horizontal_lines (pd.DataFrame): DataFrame containing horizontal lines with columns ['x1', 'y1', 'x2', 'y2'].
+    
+    Returns:
+    dict: Dictionary with vertical line indices as keys and lists of crossing points as values.
+    """
+    start_time = time.time()
+    
+    # Sort horizontal lines by their y1 coordinate
+    sorted_horizontal = horizontal_lines.sort_values(by='y1')
+    sorted_y = sorted_horizontal['y1'].to_numpy()
+    sorted_x1 = sorted_horizontal['x1'].to_numpy()
+    sorted_x2 = sorted_horizontal['x2'].to_numpy()
+   
+    crossing_points = {}
+    for v_idx, v_line in vertical_lines.iterrows():
+        v_x = v_line['x1']
+        v_y1 = min(v_line['y1'], v_line['y2'])
+        v_y2 = max(v_line['y1'], v_line['y2'])
+       
+        # Find horizontal lines in the vertical line's y range using binary search
+        left = bisect.bisect_left(sorted_y, v_y1)
+        right = bisect.bisect_right(sorted_y, v_y2)
+       
+        # Vectorized check for x coordinate overlap
+        x1_subset = sorted_x1[left:right]
+        x2_subset = sorted_x2[left:right]
+        y_subset = sorted_y[left:right]
+       
+        # Find valid crossings using numpy array operations
+        mask = (v_x >= x1_subset) & (v_x <= x2_subset)
+        crossings_y = y_subset[mask]
+       
+        # Store crossing points (already sorted due to initial y-sorting)
+        crossing_points[v_idx] = [(v_x, y) for y in crossings_y]
+   
+    print(f"Time taken: {time.time() - start_time} seconds")
+    return crossing_points
+
+def split_vertical_lines(vertical_lines, crossing_points):
+    """
+    Split vertical lines at crossing points.
+    
+    Parameters:
+    vertical_lines (pd.DataFrame): DataFrame containing vertical lines with columns ['x1', 'y1', 'x2', 'y2'].
+    crossing_points (dict): Dictionary with vertical line indices as keys and lists of crossing points as values.
+    
+    Returns:
+    list: List of dictionaries representing new vertical lines with keys 'start' and 'end'.
+    """
+    new_vertical_lines = []
+    for v_idx, v_line in vertical_lines.iterrows():
+        v_start = (v_line['x1'], v_line['y1'])
+        v_end = (v_line['x2'], v_line['y2'])
+        crossings = crossing_points.get(v_idx, [])
+       
+        current_start = v_start
+        for crossing in crossings:
+            new_vertical_lines.append({'start': current_start, 'end': crossing})
+            current_start = crossing
+        new_vertical_lines.append({'start': current_start, 'end': v_end})
+   
+    return new_vertical_lines
+
+
+def optimized_find_intersections(df_m0, df_m1, tol=1e-9):
+    """
+    Find intersections between M0 and M1 lines with spatial indexing.
+    
+    Parameters:
+    df_m0 (pd.DataFrame): DataFrame containing M0 lines with columns ['x1', 'y1', 'x2', 'y2'].
+    df_m1 (pd.DataFrame): DataFrame containing M1 lines with columns ['x1', 'y1', 'x2', 'y2'].
+    tol (float): Tolerance for floating-point comparisons.
+    
+    Returns:
+    np.ndarray: Array of intersection points.
+    """
+    m0_lines = df_m0[['x1', 'y1', 'x2', 'y2']].to_numpy()
+    m1_lines = df_m1[['x1', 'y1', 'x2', 'y2']].to_numpy()
+
+    # Build R-tree index for M1 lines
+    idx = index.Index()
+    for i, (x1, y1, x2, y2) in enumerate(m1_lines):
+        idx.insert(i, (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
+
+    intersections = []
+    for x1, y1, x2, y2 in m0_lines:
+        # Query candidates
+        bbox = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+        candidates = list(idx.intersection(bbox))
+        if not candidates:
+            continue
+
+        # Get candidate lines
+        candidates = m1_lines[candidates]
+        x3 = candidates[:, 0]
+        y3 = candidates[:, 1]
+        x4 = candidates[:, 2]
+        y4 = candidates[:, 3]
+
+        # Vectorized calculations
+        dx1 = x2 - x1
+        dy1 = y2 - y1
+        dx2 = x4 - x3
+        dy2 = y4 - y3
+
+        denom = dx1 * dy2 - dy1 * dx2
+        mask = np.abs(denom) > tol
+        valid_denom = denom[mask]
+
+        # Critical fix: Use -denom in denominator
+        with np.errstate(divide='ignore', invalid='ignore'):
+            t_numerator = (x1 - x3[mask]) * dy2[mask] - (y1 - y3[mask]) * dx2[mask]
+            t = t_numerator / -valid_denom  # Fix applied here
+
+            u_numerator = (x1 - x3[mask]) * dy1 - (y1 - y3[mask]) * dx1
+            u = u_numerator / -valid_denom  # Fix applied here
+
+        # Validate parameters
+        valid = (
+            (t >= -tol) & (t <= 1 + tol) &
+            (u >= -tol) & (u <= 1 + tol)
+        )
+        px = x1 + t[valid] * dx1
+        py = y1 + t[valid] * dy1
+
+        # Store unique points
+        unique_points = np.unique(np.column_stack((px, py)), axis=0)
+        intersections.extend(unique_points)
+
+    return np.array(intersections) if intersections else np.empty((0, 2))
+
+
+
+def optimized_adjust_vias_intersection(vias, intersections, radius=4):
+    """
+    Adjust via positions using KDTree nearest neighbor search and capture adjusted centroids and intersections to split.
+    
+    Parameters:
+    vias (numpy.ndarray): Array of via positions.
+    intersections (numpy.ndarray): Array of intersection positions.
+    radius (int): The radius within which to search for nearest intersections.
+    
+    Returns:
+    numpy.ndarray: Adjusted via positions.
+    list: List of adjusted centroids.
+    list: List of intersections to split.
+    """
+    if intersections.size == 0:
+        return vias, [], []
+   
+    tree = cKDTree(intersections)
+    distances, indices = tree.query(vias, k=1, distance_upper_bound=radius)
+    
+    # Handle out-of-bound indices gracefully by replacing them with original via positions
+    adjusted_indices = np.where(indices < len(intersections), indices, -1)
+    adjusted_vias = np.where(distances[:, None] <= radius,
+                             np.where(adjusted_indices[:, None] != -1,
+                                      intersections[adjusted_indices],
+                                      vias),
+                             vias)
+    
+    # Capture adjusted centroids and intersections to split
+    adjusted_centroids_1 = []
+    intersection_to_split = []
+    
+    for i, (cX, cY) in enumerate(vias):
+        if distances[i] <= radius and adjusted_indices[i] != -1:
+            ix, iy = intersections[adjusted_indices[i]]
+            adjusted_centroids_1.append((ix, iy))
+            intersection_to_split.append((ix, iy))
+        else:
+            adjusted_centroids_1.append((cX, cY))
+    
+    return adjusted_centroids_1, intersection_to_split
+
+
+
+def split_horizontal_lines_at_via_crossing(horizontal_lines, crossing_points):
+    """
+    Split horizontal lines at via crossing points.
+    
+    Parameters:
+    horizontal_lines (pd.DataFrame): DataFrame containing horizontal lines with columns ['x1', 'y1', 'x2', 'y2'].
+    crossing_points (list): List of crossing points as tuples (x, y).
+    
+    Returns:
+    pd.DataFrame: DataFrame containing new horizontal lines with columns ['x1', 'y1', 'x2', 'y2'].
+    """
+    new_horizontal_lines = []
+    for h_idx, h_line in horizontal_lines.iterrows():
+        h_start = (h_line['x1'], h_line['y1'])
+        h_end = (h_line['x2'], h_line['y2'])
+        current_start = h_start
+        # Filter and sort crossing points
+        sorted_crossings = sorted([crossing for crossing in crossing_points if abs(crossing[1] - h_start[1]) <= 1 and h_start[0] <= crossing[0] <= h_end[0]], key=lambda x: x[0])
+        for crossing in sorted_crossings:
+            new_horizontal_lines.append({'x1': current_start[0], 'y1': current_start[1], 'x2': crossing[0], 'y2': h_start[1]})
+            current_start = (crossing[0], h_start[1])
+        new_horizontal_lines.append({'x1': current_start[0], 'y1': current_start[1], 'x2': h_end[0], 'y2': h_end[1]})
+    return pd.DataFrame(new_horizontal_lines)
+
+def split_vertical_lines_at_via_crossing(vertical_lines, crossing_points):
+    """
+    Split vertical lines at via crossing points.
+    
+    Parameters:
+    vertical_lines (pd.DataFrame): DataFrame containing vertical lines with columns ['x1', 'y1', 'x2', 'y2'].
+    crossing_points (list): List of crossing points as tuples (x, y).
+    
+    Returns:
+    pd.DataFrame: DataFrame containing new vertical lines with columns ['x1', 'y1', 'x2', 'y2'].
+    """
+    new_vertical_lines = []
+    for v_idx, v_line in vertical_lines.iterrows():
+        v_start = (v_line['x1'], v_line['y1'])
+        v_end = (v_line['x2'], v_line['y2'])
+        current_start = v_start
+        sorted_crossings = sorted([crossing for crossing in crossing_points if abs(crossing[0] - current_start[0]) <= 1 and current_start[1] <= crossing[1] <= v_end[1]], key=lambda x: x[1])
+        for crossing in sorted_crossings:
+            new_vertical_lines.append({'x1': current_start[0], 'y1': current_start[1], 'x2': current_start[0], 'y2': crossing[1]})
+            current_start = (current_start[0], crossing[1])
+        new_vertical_lines.append({'x1': current_start[0], 'y1': current_start[1], 'x2': v_end[0], 'y2': v_end[1]})
+    return pd.DataFrame(new_vertical_lines)
+
