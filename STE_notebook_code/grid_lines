@@ -1,1 +1,109 @@
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.sparse import csr_matrix
+from skimage.measure import label
+import gc
+
+def remove_edge_effect(image):
+    """
+    Remove edge effect in segmentation by setting the edges of the image to zero.
+    
+    Parameters:
+    image (numpy.ndarray): Input binary image.
+    
+    Returns:
+    numpy.ndarray: Image with edge effect removed.
+    """
+    # Create a mask with edges set to zero
+    mask = np.ones_like(image)
+    mask[0, :] = 0
+    mask[-1, :] = 0
+    mask[:, 0] = 0
+    mask[:, -1] = 0
+    
+    # Apply the mask to the image
+    image = image * mask
+    
+    return image
+
+def getConnectedComponents_skeleton_sparse(image):
+    """
+    Get all connected components in the image, sorted by size.
+    
+    Parameters:
+    image (numpy.ndarray): Input image.
+    
+    Returns:
+    dict: Dictionary of connected components sorted by size.
+    """
+    labels = label(image)
+    component_sizes = np.bincount(labels.ravel())
+    sorted_components = np.argsort(component_sizes)[::-1]  # Sort components from largest to smallest
+    sorted_components = sorted_components[sorted_components != 0]  # Exclude background label (0)
+    
+    connected_components = {}
+    for i, component in enumerate(sorted_components):
+        mask = labels == component
+        if np.any(mask):
+            # Convert mask to a sparse matrix
+            sparse_mask = csr_matrix(mask)
+            connected_components[i] = sparse_mask
+        # Explicitly call garbage collector
+        gc.collect()
+    
+    return connected_components
+
+def classify_and_plot_components(image):
+    binary_image = remove_edge_effect(image)
+    
+    # Get connected components
+    connected_components = getConnectedComponents_skeleton_sparse(binary_image)
+    
+    straight_lines = []
+    grid_like_structures = []
+    
+    for i, component in connected_components.items():
+        mask = component.toarray()
+        
+        # Calculate statistics for the component
+        x, y, w, h = cv2.boundingRect(mask.astype(np.uint8))
+        area = np.sum(mask)
+        
+        aspect_ratio = float(w) / h
+        
+        # Criteria for fairly straight lines: high aspect ratio or low aspect ratio
+        if aspect_ratio > 5 or aspect_ratio < 0.2:
+            straight_lines.append(mask)
+        else:
+            grid_like_structures.append(mask)
+        
+        # print(f"Component {i}:")
+        # print(f"  Bounding Box: x={x}, y={y}, width={w}, height={h}")
+        # print(f"  Area: {area}")
+        
+        # # Plot the component
+        # plt.figure()
+        # plt.imshow(mask, cmap='gray')
+        # plt.title(f'Component {i}')
+        # plt.show()
+    
+    return straight_lines, grid_like_structures
+# Example usage
+image = thresh_metal_lines_M1
+skeleton_M1 = skeletonize_image(image)
+straight_lines, grid_like_structures = classify_and_plot_components(skeleton_M1)
+
+# Plot straight lines and grid-like structures separately
+for i, line in enumerate(straight_lines):
+    plt.figure()
+    plt.imshow(line, cmap='gray')
+    plt.title(f'Straight Line {i}')
+    plt.show()
+
+# for i, grid in enumerate(grid_like_structures):
+#     plt.figure()
+#     plt.imshow(grid, cmap='gray')
+#     plt.title(f'Grid-like Structure {i}')
+#     plt.show()
 
