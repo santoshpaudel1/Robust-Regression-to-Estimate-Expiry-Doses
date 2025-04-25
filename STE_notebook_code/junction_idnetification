@@ -1,1 +1,221 @@
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.sparse import csr_matrix
+from skimage.measure import label
+import matplotlib.pyplot as plt
+from skimage.morphology import skeletonize
+from sklearn.cluster import DBSCAN
+import networkx as nx
+from skimage.util import img_as_bool
+import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.cluster import DBSCAN
+from collections import defaultdict
+import time
+import bisect
+from rtree import index
+from scipy.spatial import cKDTree
+import gc
+import math 
+from skimage.morphology import skeletonize, erosion, dilation, disk
+from skimage.measure import label
+from scipy.sparse import csr_matrix
+import gc
+
+%matplotlib qt 
+
+def adaptive_thresholding(M1_sample, threshold):
+    """
+    Apply adaptive thresholding to the input image.
+    
+    Parameters:
+    M1_sample (numpy.ndarray): Input image.
+    
+    Returns:
+    numpy.ndarray: Thresholded binary image.
+    """
+    median_pixel = np.median(M1_sample)
+    for i in range(0, 140, 10):
+        ret, thresh_metal_lines_M1 = cv2.threshold(M1_sample, median_pixel - i, 255, cv2.THRESH_BINARY)
+        high_intensity_pixel_gt_one_percent = thresh_metal_lines_M1.sum() / (M1_sample.shape[0] * M1_sample.shape[1] * 255) * 100
+        if high_intensity_pixel_gt_one_percent > threshold:
+            break
+    return thresh_metal_lines_M1
+	
+	
+	
+image_path_M0 = r'C:\Users\spaudel\OneDrive - Micron Technology, Inc\SEM IC Images\Test_Images\Test_150_Hynix\2_M0.png' 
+image_path_M1 = r'C:\Users\spaudel\OneDrive - Micron Technology, Inc\SEM IC Images\Test_Images\Test_150_Hynix\2_M1.png'
+image_path_M2 = r'C:\Users\spaudel\OneDrive - Micron Technology, Inc\SEM IC Images\Test_Images\Test_150_Hynix\2_M2.png'
+image_path_M3 = r'C:\Users\spaudel\OneDrive - Micron Technology, Inc\SEM IC Images\Test_Images\Test_150_Hynix\2_M3.png'
+image_path_M4 = r'C:\Users\spaudel\OneDrive - Micron Technology, Inc\SEM IC Images\Test_Images\Test_150_Hynix\2_M4.png'
+
+# Read the images
+M1_sample = cv2.imread(image_path_M1, cv2.IMREAD_GRAYSCALE)
+M0_sample = cv2.imread(image_path_M0, cv2.IMREAD_GRAYSCALE)
+M2_sample = cv2.imread(image_path_M2, cv2.IMREAD_GRAYSCALE)
+M3_sample = cv2.imread(image_path_M3, cv2.IMREAD_GRAYSCALE)
+M4_sample = cv2.imread(image_path_M4, cv2.IMREAD_GRAYSCALE)
+
+height, width = M0_sample.shape
+M1_sample= M1_sample[:height, :width]
+ww= int(width/2)
+x, y, w, h =0,0,ww,1000
+M0_sample = M0_sample[y:y+h, x:x+w]
+M1_sample = M1_sample[y:y+h, x:x+w]
+
+#M5_sample = M5_sample[y:y+h, x:x+w]
+
+M0_sample = M0_sample[y:y+h, x:x+w]
+M1_sample = M1_sample[y:y+h, x:x+w]
+M2_sample = M2_sample[y:y+h, x:x+w]
+M3_sample = M3_sample[y:y+h, x:x+w]
+M4_sample = M4_sample[y:y+h, x:x+w]
+# M1_array = img_to_array(M1_sample)
+
+
+
+
+########################### print the grid like structure and straight line like structures details ######################
+
+
+def getConnectedComponents_skeleton_sparse(binary_image):
+    """
+    Get all connected components in the image, sorted by size, and classify them.
+    
+    Parameters:
+    image (numpy.ndarray): Input image.
+    
+    Returns:
+    tuple: Two lists containing straight lines and grid-like structures.
+    """
+    
+    # Skeletonize the image
+    skeleton = skeletonize(binary_image)
+    
+    # Get connected components
+    labels = label(skeleton)
+    component_sizes = np.bincount(labels.ravel())
+    sorted_components = np.argsort(component_sizes)[::-1]  # Sort components from largest to smallest
+    sorted_components = sorted_components[sorted_components != 0]  # Exclude background label (0)
+    
+    straight_lines = []
+    grid_like_structures = []
+    
+    for i, component in enumerate(sorted_components):
+        mask = labels == component
+        if np.any(mask):
+            # Convert mask to a sparse matrix
+            sparse_mask = csr_matrix(mask)
+            mask = sparse_mask.toarray()
+            
+            # Calculate statistics for the component
+            x, y, w, h = cv2.boundingRect(mask.astype(np.uint8))
+            area = np.sum(mask)
+            
+            # Count the number of junctions in the component
+            num_junctions = count_junctions(mask.astype(np.uint8))
+            
+            # Criteria for classification based on number of junctions
+            if num_junctions >= 30:
+                grid_like_structures.append(mask)
+                # print(f"Grid-like Structure {len(grid_like_structures)}:")
+            else:
+                straight_lines.append(mask)
+            #     print(f"Straight Line {len(straight_lines)}:")
+            
+            # print(f"  Bounding Box: x={x}, y={y}, width={w}, height={h}")
+            # print(f"  Area: {area}")
+            # print(f"  Number of Junctions: {num_junctions}")
+            
+            # Explicitly call garbage collector
+            gc.collect()
+    
+    return straight_lines, grid_like_structures
+	
+	
+def count_junctions(component):
+    """
+    Count the number of junctions in a skeletonized component.
+    
+    Parameters:
+    component (numpy.ndarray): Binary image of the component.
+    
+    Returns:
+    int: Number of junctions in the component.
+    """
+    
+    # Define a kernel to detect junctions
+    
+    kernel = np.array([[1, 1, 1],
+                       [1, 10, 1],
+                       [1, 1, 1]], dtype=np.uint8)
+
+    convolved = cv2.filter2D(component, -1, kernel)
+    
+    # Count the number of junctions (pixels with value greater than 12)
+    junctions = np.sum(convolved >= 13)
+    
+    return junctions
+	
+def remove_edge_effect(image):
+    """
+    Remove edge effect in segmentation by setting the edges of the image to zero.
+    
+    Parameters:
+    image (numpy.ndarray): Input binary image.
+    
+    Returns:
+    numpy.ndarray: Image with edge effect removed.
+    """
+    # Create a mask with edges set to zero
+    mask = np.ones_like(image)
+    mask[0, :] = 0
+    mask[-1, :] = 0
+    mask[:, 0] = 0
+    mask[:, -1] = 0
+    
+    # Apply the mask to the image
+    image = image * mask
+    
+    return image
+	
+thresh_metal_lines_M1 = adaptive_thresholding(M1_sample,55)
+image = thresh_metal_lines_M1
+binary_image = remove_edge_effect(image)
+skeleton_M1 =  skeletonize(binary_image)
+straight_lines, grid_like_structures = getConnectedComponents_skeleton_sparse(skeleton_M1)
+
+
+# Create empty images for visualization with the same size as the original image
+straight_lines_image = np.zeros_like(binary_image)
+grid_like_structures_image = np.zeros_like(binary_image)
+
+# Draw straight lines on the straight_lines_image
+for line in straight_lines:
+    straight_lines_image += line
+
+# Draw grid-like structures on the grid_like_structures_image
+for grid in grid_like_structures:
+    grid_like_structures_image += grid
+
+
+
+
+# Visualize the straight lines image
+plt.figure(figsize=(10, 10))
+plt.imshow(straight_lines_image, cmap='gray')
+plt.title('Straight Lines')
+plt.show()
+
+# Visualize the grid-like structures image
+plt.figure(figsize=(10, 10))
+plt.imshow(grid_like_structures_image, cmap='gray')
+plt.title('Grid-like Structures')
+plt.show()
+
+overlay_image = cv2.addWeighted(straight_lines_image*255, 0.3, M1_sample, 0.7, 0)
+plt.imshow(overlay_image)
+
 
