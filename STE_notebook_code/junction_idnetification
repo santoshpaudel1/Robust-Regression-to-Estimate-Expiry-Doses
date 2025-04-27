@@ -219,3 +219,97 @@ overlay_image = cv2.addWeighted(straight_lines_image*255, 0.3, M1_sample, 0.7, 0
 plt.imshow(overlay_image)
 
 
+
+#################### Grid vs straight lines: memory efficiet ########################################
+
+import cv2
+import numpy as np
+from skimage.measure import label
+from skimage.morphology import skeletonize
+import matplotlib.pyplot as plt
+
+def adaptive_thresholding(M1_sample, threshold):
+    median_pixel = np.median(M1_sample)
+    for i in range(0, 140, 10):
+        _, thresh = cv2.threshold(M1_sample, median_pixel - i, 255, cv2.THRESH_BINARY)
+        percent_high = np.mean(thresh > 0) * 100
+        if percent_high > threshold:
+            break
+    return thresh
+
+def count_junctions(component_mask):
+    y_coords, x_coords = np.where(component_mask)
+    coords_set = set(zip(y_coords, x_coords))
+    junction_count = 0
+    for y, x in zip(y_coords, x_coords):
+        count = 0
+        for dy in [-1, 0, 1]:
+            for dx in [-1, 0, 1]:
+                if dy == 0 and dx == 0:
+                    continue
+                if (y + dy, x + dx) in coords_set:
+                    count += 1
+        if count >= 3:
+            junction_count += 1
+    return junction_count
+
+def get_connected_components(skeleton):
+    labels = label(skeleton)
+    components = []
+    for component in np.unique(labels):
+        if component == 0:
+            continue
+        coords = np.argwhere(labels == component)
+        if len(coords) == 0:
+            continue
+        y_min, y_max = coords[:, 0].min(), coords[:, 0].max()
+        x_min, x_max = coords[:, 1].min(), coords[:, 1].max()
+        sub_labels = labels[y_min:y_max+1, x_min:x_max+1]
+        component_mask = (sub_labels == component).astype(np.uint8)
+        components.append((component_mask, x_min, y_min, x_max, y_max))
+    return components
+
+def process_large_image(binary_image):
+    skeleton = skeletonize(binary_image)
+    components = get_connected_components(skeleton)
+    
+    straight_lines = []
+    grid_like = []
+    
+    for component in components:
+        mask, x_min, y_min, x_max, y_max = component
+        num_junc = count_junctions(mask)
+        if num_junc >= 30:
+            grid_like.append(component)
+        else:
+            straight_lines.append(component)
+    
+    return straight_lines, grid_like
+
+def create_composite_image(components, template):
+    composite = np.zeros_like(template, dtype=np.uint8)
+    for mask, x_min, y_min, x_max, y_max in components:
+        h, w = mask.shape
+        composite[y_min:y_min+h, x_min:x_min+w] |= mask * 255
+    return composite
+
+# Load and preprocess image
+image_path = 'your_image_path.png'
+img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+binary_img = adaptive_thresholding(img, 55)
+binary_img = (binary_img > 0).astype(np.uint8)  # Ensure binary image
+
+# Process components
+straight_lines, grids = process_large_image(binary_img)
+
+# Create visualizations
+straight_img = create_composite_image(straight_lines, img)
+grid_img = create_composite_image(grids, img)
+
+# Visualization
+plt.figure(figsize=(20, 10))
+plt.subplot(121), plt.imshow(straight_img, cmap='gray'), plt.title('Straight Lines')
+plt.subplot(122), plt.imshow(grid_img, cmap='gray'), plt.title('Grid Structures')
+plt.show()
+
+
