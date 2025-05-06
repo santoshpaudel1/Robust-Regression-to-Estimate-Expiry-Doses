@@ -248,3 +248,211 @@ end_time = time.time()
 total_time = end_time - start_time
 print(f"Total time to run the code: {total_time:.2f} seconds")
 
+
+########################## This make more sense for M0 sample ##################################33
+
+
+import cv2
+import numpy as np
+from skimage.morphology import skeletonize
+from skimage.measure import label
+import matplotlib.pyplot as plt
+
+def visualize_components(components, original_shape, title="Components"):
+    """Visualize extracted components"""
+    vis = np.zeros(original_shape, dtype=np.uint8)
+    for component in components:
+        mask, x_min, y_min, x_max, y_max = component
+        vis[y_min:y_max+1, x_min:x_max+1] = np.maximum(vis[y_min:y_max+1, x_min:x_max+1], mask*255)
+    plt.figure(figsize=(10,10))
+    plt.imshow(vis, cmap='gray')
+    plt.title(title)
+    plt.axis('off')
+    plt.show()
+
+def extract_dummy_non_dummy_components(binary_image, centroids):
+    """Separate components containing centroids from those that don't"""
+    bin_image = (binary_image * 255).astype(np.uint8)
+    num_labels, labels_im = cv2.connectedComponents(bin_image)
+    
+    dummy = np.zeros_like(bin_image)
+    non_dummy = np.zeros_like(bin_image)
+    
+    for label in range(1, num_labels):
+        mask = (labels_im == label).astype(np.uint8) * 255
+        is_non_dummy = any(mask[int(y), int(x)] == 255 for x, y in centroids)
+        (non_dummy if is_non_dummy else dummy)[mask == 255] = 255
+    
+    return dummy, non_dummy
+
+def count_endpoints_and_junctions(skeleton_mask):
+    """Count topological features in skeletonized component"""
+    padded = np.pad(skeleton_mask, pad_width=1, mode='constant')
+    endpoints = junctions = 0
+    
+    for y in range(1, padded.shape[0]-1):
+        for x in range(1, padded.shape[1]-1):
+            if not padded[y,x]:
+                continue
+                
+            neighbors = 0
+            for dy in [-1, 0, 1]:
+                for dx in [-1, 0, 1]:
+                    if dy == 0 and dx == 0:
+                        continue
+                    neighbors += padded[y+dy, x+dx]
+            
+            if neighbors == 1:
+                endpoints += 1
+            elif neighbors >= 3:
+                junctions += 1
+                
+    return endpoints, junctions
+
+def count_holes(mask):
+    """Count enclosed holes in a component"""
+    contours, hierarchy = cv2.findContours(mask.astype(np.uint8), 
+                                         cv2.RETR_CCOMP, 
+                                         cv2.CHAIN_APPROX_SIMPLE)
+    return sum(h[3] != -1 for h in hierarchy[0]) if hierarchy is not None else 0
+
+def get_connected_components(binary_image):
+    """Extract all connected components with bounding boxes"""
+    kernel = np.ones((3,3), np.uint8)
+    opened = cv2.morphologyEx((binary_image*255).astype(np.uint8), 
+                             cv2.MORPH_OPEN, kernel)
+    labels = label(opened > 0)
+    components = []
+    
+    for lbl in np.unique(labels):
+        if lbl == 0: 
+            continue
+            
+        coords = np.argwhere(labels == lbl)
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
+        component_mask = (labels[y_min:y_max+1, x_min:x_max+1] == lbl).astype(np.uint8)
+        components.append((component_mask, x_min, y_min, x_max, y_max))
+    
+    return components
+
+def classify_component(component):
+    """Classify a component as simple or complex"""
+    mask, x_min, y_min, x_max, y_max = component
+    skeleton = skeletonize(mask).astype(np.uint8)
+    endpoints, junctions = count_endpoints_and_junctions(skeleton)
+    total_branches = endpoints + junctions
+    holes = count_holes(mask)
+    
+    # Geometric properties
+    area = mask.sum()
+    length = max(x_max-x_min, y_max-y_min)
+    width = min(x_max-x_min, y_max-y_min)
+    aspect_ratio = length / (width + 1e-6)  # Avoid division by zero
+    
+    # Classification rules
+    if holes == 2 and total_branches <= 25:  # H-shape
+        return "simple"
+    elif total_branches < 25 and (aspect_ratio > 5 or holes == 0):
+        return "simple"  # Line, L-shape, or T-shape
+    else:
+        return "complex"
+
+def process_image(binary_image, centroids=None, visualize=False):
+    """Complete processing pipeline"""
+    # Step 1: Separate dummy/non-dummy if centroids provided
+    if centroids:
+        non_dummy, dummy = extract_dummy_non_dummy_components(binary_image, centroids)
+        if visualize:
+            visualize_components(get_connected_components(dummy), binary_image.shape, "Dummy Components")
+            visualize_components(get_connected_components(non_dummy), binary_image.shape, "Non-Dummy Components")
+        working_image = non_dummy
+    else:
+        working_image = binary_image
+    
+    # Step 2: Get all connected components
+    components = get_connected_components(working_image)
+    if visualize:
+        visualize_components(components, binary_image.shape, "All Components")
+    
+    # Step 3: Classify each component
+    simple, complex = [], []
+    for component in components:
+        if classify_component(component) == "simple":
+            simple.append(component)
+        else:
+            complex.append(component)
+    
+    # Visualization
+    if visualize:
+        visualize_components(simple, binary_image.shape, "Simple Structures (L/T/H)")
+        visualize_components(complex, binary_image.shape, "Complex Structures")
+    
+    return simple, complex
+
+def detect_vias(M_sample, threshold_percentage, contour_size):
+    """
+    Detect vias in the given sample metal layer and return the image with vias and their surrounding area filled with white pixels.
+    
+    Parameters:
+    M2_sample (numpy.ndarray): The input sample image.
+    threshold_percentage (float): The percentage threshold to determine high-intensity pixels.
+    contour_size (int): The maximum size of the contours to be detected.
+    
+    Returns:
+    numpy.ndarray: The image with vias and their surrounding area filled with white pixels.
+    list: A list of centroids of the detected vias.
+    """
+    max_pixel = M_sample.max(axis=(0, 1))
+
+    for i in range(0, 100, 10):
+        ret, thresh = cv2.threshold(M_sample, max_pixel - i, 255, cv2.THRESH_BINARY)
+        high_intensity_pixel_gt_one_percent = thresh.sum() / (M_sample.shape[0] * M_sample.shape[1] * 255) * 100
+        if high_intensity_pixel_gt_one_percent > threshold_percentage:
+            break
+
+    kernel = np.ones((3, 3), np.uint8)
+    dilate = cv2.dilate(thresh, kernel, 1)
+
+    contours, hierarchy = cv2.findContours(image=dilate, mode=cv2.RETR_TREE, method=cv2.CHAIN_APPROX_NONE)
+    # Filter contours based on length
+    contours = [cnt for cnt in contours if cv2.arcLength(cnt, True) <= contour_size]
+
+    image_copy = M_sample.copy()
+    cv2.drawContours(image=image_copy, contours=contours, contourIdx=-1, color=(255, 0, 0), thickness=1, lineType=cv2.LINE_AA)
+    
+    # Calculate centroids
+    centroids = []
+    for cnt in contours:
+        M = cv2.moments(cnt)
+        if M["m00"] != 0:
+            cX = int(M["m10"] / M["m00"])
+            cY = int(M["m01"] / M["m00"])
+            centroids.append((cX, cY))
+
+    # Return the image copy and centroids
+    return image_copy, centroids
+
+# Example usage
+if __name__ == "__main__":
+    # Load your binary image (0=background, 1=foreground)
+    binary_image = bin_img # Replace with your image loading code
+    centroids = [(100,200), (150,300), (500,200),(800,600),(450,550),(10,200),(200,40)]  # Replace with your actual centroids
+    
+    # Process with visualization
+    simple, complex = process_image(binary_image, centroids, visualize=True)
+    
+    # Create composite images
+    def create_composite(components, original_shape):
+        comp = np.zeros(original_shape, dtype=np.uint8)
+        for mask, x1, y1, x2, y2 in components:
+            comp[y1:y2+1, x1:x2+1] = np.maximum(comp[y1:y2+1, x1:x2+1], mask*255)
+        return comp
+    
+    simple_img = create_composite(simple, binary_image.shape)
+    complex_img = create_composite(complex, binary_image.shape)
+    
+    # Save results
+    plt.imshow(simple_img)
+    plt.imshow(complex_img)
+
