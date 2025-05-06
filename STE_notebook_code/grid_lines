@@ -107,3 +107,144 @@ for i, line in enumerate(straight_lines):
 #     plt.title(f'Grid-like Structure {i}')
 #     plt.show()
 
+
+
+############################################## This is the second effort that is used for directly from binary image, not skleleton###########
+
+
+
+################################# Connected components ananlysis to seperate the the dummy and non dummy structures:
+import cv2
+import numpy as np
+
+def extract_dummy_non_dummy_components(binary_image, centroids):
+    """
+    Extracts dummy and non-dummy components from a binary image based on given centroids.
+
+    Parameters:
+    binary_image (numpy.ndarray): The binary image where connected components are to be identified.
+    centroids (list of tuples): A list of (x, y) coordinates representing the centroids.
+
+    Returns:
+    dummy_components (numpy.ndarray): Binary image with dummy components.
+    non_dummy_components (numpy.ndarray): Binary image with non-dummy components.
+    """
+    # Ensure the binary image is in the correct format (CV_8U)
+    bin_image = (binary_image * 255).astype(np.uint8)
+
+    # Label connected components
+    num_labels, labels_im = cv2.connectedComponents(bin_image)
+
+    # Create masks for dummy and non-dummy components
+    dummy_components = np.zeros_like(bin_image)
+    non_dummy_components = np.zeros_like(bin_image)
+
+    # Check each label
+    for label in range(1, num_labels):
+        mask = (labels_im == label).astype(np.uint8) * 255
+        
+        # Check if any centroid is within the component
+        is_non_dummy = False
+        for centroid in centroids:
+            x, y = int(centroid[0]), int(centroid[1])
+            if mask[y, x] == 255:
+                is_non_dummy = True
+                break
+        
+        if is_non_dummy:
+            non_dummy_components[mask == 255] = 255
+        else:
+            dummy_components[mask == 255] = 255
+
+    return dummy_components, non_dummy_components
+
+
+
+def count_junctions(component_mask):
+    y_coords, x_coords = np.where(component_mask)
+    coords_set = set(zip(y_coords, x_coords))
+    junction_count = 0
+    for y, x in zip(y_coords, x_coords):
+        count = 0
+        for dy in [-1, 0, 1]:
+            for dx in [-1, 0, 1]:
+                if dy == 0 and dx == 0:
+                    continue
+                if (y + dy, x + dx) in coords_set:
+                    count += 1
+        if count >=6:
+            junction_count += 1
+    return junction_count
+
+
+
+
+def get_connected_components(segmented_image):
+    # Apply morphological opening to remove small connections
+    kernel = np.ones((3, 3), np.uint8)
+    opened_image = cv2.morphologyEx(segmented_image, cv2.MORPH_OPEN, kernel)
+    
+    labels = label(opened_image)
+    components = []
+    for component in np.unique(labels):
+        if component == 0:
+            continue
+        coords = np.argwhere(labels == component)
+        if len(coords) == 0:
+            continue
+        y_min, y_max = coords[:, 0].min(), coords[:, 0].max()
+        x_min, x_max = coords[:, 1].min(), coords[:, 1].max()
+        sub_labels = labels[y_min:y_max+1, x_min:x_max+1]
+        component_mask = (sub_labels == component).astype(np.uint8)
+        components.append((component_mask, x_min, y_min, x_max, y_max))
+    return components
+
+def has_holes(mask):
+    contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    for i in range(len(contours)):
+        if hierarchy[0][i][3] != -1:  # Check if the contour has a parent (indicating a hole)
+            return True
+    return False
+
+def process_large_image(binary_image):
+    components = get_connected_components(binary_image)
+    
+    straight_lines = []
+    grid = []
+    for component in components:
+        mask, x_min, y_min, x_max, y_max = component
+        
+        # Calculate properties of the component
+        num_junc = count_junctions(mask)
+        area = np.sum(mask)
+        length = max(x_max - x_min, y_max - y_min)
+        width = min(x_max - x_min, y_max - y_min)
+        aspect_ratio = length / width
+        extent = area / ((x_max - x_min) * (y_max - y_min))
+        
+        # Check for holes in the component
+        if has_holes(mask):
+            grid.append(component)
+        # Classify based on width, number of junctions, and other properties
+        elif num_junc <=1000:
+            straight_lines.append(component)
+        else:
+            grid.append(component)
+            
+    return straight_lines, grid
+
+
+
+import time
+
+start_time = time.time()
+#Process components
+straight_lines, grid  = process_large_image(non_dummy_components)
+# Create visualizations
+straight_img = create_composite_image(straight_lines,non_dummy_components)
+grid_img = create_composite_image(grid, non_dummy_components)
+
+end_time = time.time()
+total_time = end_time - start_time
+print(f"Total time to run the code: {total_time:.2f} seconds")
+
