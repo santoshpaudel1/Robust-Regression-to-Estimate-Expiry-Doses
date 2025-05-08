@@ -1,1 +1,162 @@
+#############Method 1: Adaptive Thresholding with Shape Filtering######################
+############
 
+def detect_vias_improved(M_sample, min_area=5, max_area=100, circularity_threshold=0.6):
+    """
+    Improved via detection using adaptive thresholding and shape analysis
+    
+    Parameters:
+    M_sample (numpy.ndarray): Input grayscale image
+    min_area (int): Minimum via area in pixels
+    max_area (int): Maximum via area in pixels
+    circularity_threshold (float): Minimum circularity (0-1) where 1 is perfect circle
+    
+    Returns:
+    numpy.ndarray: Image with detected vias marked
+    list: Centroids of detected vias
+    """
+    # Apply adaptive thresholding
+    thresh = cv2.adaptiveThreshold(
+        M_sample, 255, 
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY, 11, 2
+    )
+    
+    # Morphological operations to clean up
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+    
+    # Find contours
+    contours, _ = cv2.findContours(cleaned, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    
+    centroids = []
+    image_copy = cv2.cvtColor(M_sample, cv2.COLOR_GRAY2BGR)
+    
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        
+        # Filter by area
+        if area < min_area or area > max_area:
+            continue
+            
+        # Calculate circularity
+        perimeter = cv2.arcLength(cnt, True)
+        if perimeter == 0:
+            continue
+        circularity = 4 * np.pi * area / (perimeter * perimeter)
+        
+        # Filter by circularity
+        if circularity < circularity_threshold:
+            continue
+            
+        # Get centroid
+        M = cv2.moments(cnt)
+        if M["m00"] != 0:
+            cX = int(M["m10"] / M["m00"])
+            cY = int(M["m01"] / M["m00"])
+            centroids.append((cX, cY))
+            
+            # Draw on image
+            cv2.drawContours(image_copy, [cnt], -1, (0, 255, 0), 1)
+            cv2.circle(image_copy, (cX, cY), 3, (0, 0, 255), -1)
+    
+    return image_copy, centroids
+
+
+##################### Local Maxima detection with Blob detection#########################
+##################### intensity_percentile between 90-98 ################################
+#################### Try Gaussian blur: blurred = cv2.GaussianBlur(M_sample, (3,3), 0) before trying to apply to ddtect vias#######
+
+def detect_vias_blob(M_sample, min_area=5, max_area=100):
+    """
+    Via detection using blob detection which is good for circular features
+    
+    Parameters:
+    M_sample (numpy.ndarray): Input grayscale image
+    min_area (int): Minimum via area in pixels
+    max_area (int): Maximum via area in pixels
+    
+    Returns:
+    numpy.ndarray: Image with detected vias marked
+    list: Centroids of detected vias
+    """
+    # Setup SimpleBlobDetector parameters
+    params = cv2.SimpleBlobDetector_Params()
+    
+    # Filter by intensity (vias are bright)
+    params.filterByColor = True
+    params.blobColor = 255
+    
+    # Filter by area
+    params.filterByArea = True
+    params.minArea = min_area
+    params.maxArea = max_area
+    
+    # Filter by circularity (optional)
+    params.filterByCircularity = True
+    params.minCircularity = 0.5
+    
+    # Create detector and detect
+    detector = cv2.SimpleBlobDetector_create(params)
+    keypoints = detector.detect(255 - M_sample)  # Invert if needed
+    
+    # Draw keypoints and get centroids
+    image_copy = cv2.cvtColor(M_sample, cv2.COLOR_GRAY2BGR)
+    centroids = []
+    
+    for kp in keypoints:
+        x, y = int(kp.pt[0]), int(kp.pt[1])
+        centroids.append((x, y))
+        cv2.circle(image_copy, (x, y), int(kp.size/2), (0, 255, 0), 1)
+        cv2.circle(image_copy, (x, y), 2, (0, 0, 255), -1)
+    
+    return image_copy, centroids
+
+
+###########Method 3: Combined Intensity and Shape Approach
+
+def detect_vias_combined(M_sample, intensity_percentile=95, min_area=5, max_area=100):
+    """
+    Combined approach using intensity percentile and shape analysis
+    
+    Parameters:
+    M_sample (numpy.ndarray): Input grayscale image
+    intensity_percentile (float): Percentile for intensity threshold (0-100)
+    min_area (int): Minimum via area in pixels
+    max_area (int): Maximum via area in pixels
+    
+    Returns:
+    numpy.ndarray: Image with detected vias marked
+    list: Centroids of detected vias
+    """
+    # Determine threshold based on percentile
+    threshold = np.percentile(M_sample, intensity_percentile)
+    _, thresh = cv2.threshold(M_sample, threshold, 255, cv2.THRESH_BINARY)
+    
+    # Clean up
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+    
+    # Find contours
+    contours, _ = cv2.findContours(cleaned, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    
+    centroids = []
+    image_copy = cv2.cvtColor(M_sample, cv2.COLOR_GRAY2BGR)
+    
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < min_area or area > max_area:
+            continue
+            
+        # Get centroid
+        M = cv2.moments(cnt)
+        if M["m00"] != 0:
+            cX = int(M["m10"] / M["m00"])
+            cY = int(M["m01"] / M["m00"])
+            centroids.append((cX, cY))
+            
+            # Draw on image
+            cv2.drawContours(image_copy, [cnt], -1, (0, 255, 0), 1)
+            cv2.circle(image_copy, (cX, cY), 3, (0, 0, 255), -1)
+    
+    return image_copy, centroids
