@@ -1,1 +1,49 @@
+import cv2
+import numpy as np
 
+def extract_dummy_non_dummy_components(binary_image, centroids):
+    """
+    Accurately separates dummy and non-dummy components by checking a neighborhood 
+    around each centroid to handle coordinate rounding issues.
+
+    Parameters:
+    binary_image (numpy.ndarray): Binary image with connected components.
+    centroids (list of tuples): List of (x, y) coordinates (floats or integers).
+
+    Returns:
+    tuple: Two binary images (dummy_components, non_dummy_components)
+    """
+    # Convert to 8-bit binary image format
+    bin_image = (binary_image * 255).astype(np.uint8)
+    
+    # Label connected components
+    num_labels, labels_im = cv2.connectedComponents(bin_image)
+    height, width = labels_im.shape
+
+    non_dummy_labels = set()
+    
+    # Check a 3x3 neighborhood around each centroid's rounded position
+    for (x, y) in centroids:
+        x_center = int(round(x))
+        y_center = int(round(y))
+        
+        # Check all pixels in 3x3 grid around centroid
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                x_int = x_center + dx
+                y_int = y_center + dy
+                
+                # Verify bounds before checking label
+                if 0 <= x_int < width and 0 <= y_int < height:
+                    label = labels_im[y_int, x_int]
+                    if label != 0:
+                        non_dummy_labels.add(label)
+
+    # Create component masks using vectorized operations
+    non_dummy_mask = np.isin(labels_im, list(non_dummy_labels))
+    non_dummy_components = (non_dummy_mask * 255).astype(np.uint8)
+    
+    dummy_mask = (labels_im != 0) & ~non_dummy_mask
+    dummy_components = (dummy_mask * 255).astype(np.uint8)
+
+    return dummy_components, non_dummy_components
