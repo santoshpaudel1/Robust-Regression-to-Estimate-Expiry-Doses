@@ -168,3 +168,76 @@ end_time = time.time()
 total_time = end_time - start_time
 print(f"Total time to run the code: {total_time:.2f} seconds")
 
+
+import cv2
+import numpy as np
+from skimage.morphology import skeletonize
+from multiprocessing import Pool
+
+def count_junctions(skeleton):
+    """Count junctions using convolution on skeletonized image."""
+    kernel = np.array([[1,1,1], [1,0,1], [1,1,1]], dtype=np.uint8)
+    neighbor_count = cv2.filter2D(skeleton, cv2.CV_8U, kernel)
+    return np.count_nonzero(neighbor_count >= 3)
+
+def calculate_features(component_mask):
+    """Vectorized feature extraction for a component."""
+    skeleton = skeletonize(component_mask // 255).astype(np.uint8)
+    if np.sum(skeleton) == 0:
+        return 0, 0, 0, 0
+    
+    # Junction and endpoint detection
+    kernel = np.array([[1,1,1], [1,0,1], [1,1,1]], dtype=np.uint8)
+    neighbor_count = cv2.filter2D(skeleton, cv2.CV_8U, kernel)
+    junctions = np.count_nonzero(neighbor_count >= 3)
+    endpoints = np.count_nonzero(neighbor_count == 1)
+    
+    # Geometric features
+    area = np.sum(component_mask) // 255
+    y, x = np.where(component_mask)
+    length = max(y.max()-y.min(), x.max()-x.min()) if len(y) > 0 else 0
+    width = min(y.max()-y.min(), x.max()-x.min()) if len(y) > 0 else 0
+    aspect_ratio = length / width if width > 0 else 0
+    
+    return junctions, endpoints, aspect_ratio, area
+
+def get_connected_components(binary_image):
+    """Optimized component extraction using OpenCV."""
+    kernel = np.ones((3,3), np.uint8)
+    opened = cv2.morphologyEx(binary_image, cv2.MORPH_OPEN, kernel)
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(opened, connectivity=8)
+    
+    components = []
+    for i in range(1, len(stats)):
+        x, y, w, h = stats[i][:4]
+        mask = (labels[y:y+h, x:x+w] == i).astype(np.uint8) * 255
+        components.append((mask, (x, y, x+w, y+h)))
+    return components
+
+def classify_component(args):
+    """Parallel classification worker."""
+    mask, bbox = args
+    junctions, endpoints, aspect_ratio, area = calculate_features(mask)
+    
+    # Classification rules (adjust thresholds as needed)
+    if (junctions <= 2 and 
+        endpoints <= 3 and 
+        aspect_ratio > 4 and 
+        area < 5000):
+        return ('simple', mask, bbox)
+    return ('complex', mask, bbox)
+
+def process_large_image(binary_image):
+    """Main processing with parallel execution."""
+    components = get_connected_components((binary_image * 255).astype(np.uint8))
+    
+    # Parallel processing
+    with Pool() as pool:
+        results = pool.map(classify_component, components)
+    
+    # Separate results
+    simple = [r[1:] for r in results if r[0] == 'simple']
+    complex = [r[1:] for r in results if r[0] == 'complex']
+    
+    return simple, complex
+
