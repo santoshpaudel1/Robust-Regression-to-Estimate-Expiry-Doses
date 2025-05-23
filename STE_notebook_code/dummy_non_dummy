@@ -154,3 +154,17 @@ def break_connected_components(segmented_image):
     opened_image = cv2.morphologyEx(segmented_image, cv2.MORPH_OPEN, kernel)
     return opened_image
 
+
+import time
+
+start_time = time.time()
+#Process components
+straight_lines_M0, grid_M0  = process_large_image(non_dummy_M0)
+# Create visualizations
+straight_img_M0 = create_composite_image(straight_lines_M0,non_dummy_M0)
+grid_img_M0 = create_composite_image(grid_M0, non_dummy_M0)
+
+end_time = time.time()
+total_time = end_time - start_time
+print(f"Total time to run the code: {total_time:.2f} seconds")
+
