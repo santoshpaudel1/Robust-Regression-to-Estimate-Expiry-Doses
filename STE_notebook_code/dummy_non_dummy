@@ -241,3 +241,18 @@ def process_large_image(binary_image):
     
     return simple, complex
 
+
+def create_composite_images(simple_components, complex_components, image_shape):
+    """Create output images showing classified components."""
+    simple_img = np.zeros(image_shape, dtype=np.uint8)
+    complex_img = np.zeros(image_shape, dtype=np.uint8)
+
+    def paste_components(components, target):
+        for mask, (x, y, x2, y2) in components:
+            h, w = mask.shape
+            target[y:y+h, x:x+w] = np.maximum(target[y:y+h, x:x+w], mask)
+
+    paste_components(simple_components, simple_img)
+    paste_components(complex_components, complex_img)
+
+    return simple_img, complex_img
