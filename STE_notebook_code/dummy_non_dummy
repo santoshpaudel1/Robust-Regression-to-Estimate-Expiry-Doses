@@ -256,3 +256,112 @@ def create_composite_images(simple_components, complex_components, image_shape):
     paste_components(complex_components, complex_img)
 
     return simple_img, complex_img
+
+
+
+
+
+import cv2
+import numpy as np
+from skimage.morphology import skeletonize
+from multiprocessing import Pool
+import time
+
+# ------------------------- Core Processing Functions -------------------------
+
+def calculate_features(mask):
+    """Vectorized feature extraction with hole detection."""
+    skeleton = skeletonize(mask // 255).astype(np.uint8)
+    
+    # Junction and endpoint detection
+    kernel = np.array([[1,1,1], [1,0,1], [1,1,1]], dtype=np.uint8)
+    neighbor_count = cv2.filter2D(skeleton, cv2.CV_8U, kernel)
+    junctions = np.count_nonzero(neighbor_count >= 3)
+    endpoints = np.count_nonzero(neighbor_count == 1)
+    
+    # Geometric features
+    y, x = np.where(mask)
+    length = max(y.max()-y.min(), x.max()-x.min()) if len(y) > 0 else 0
+    width = min(y.max()-y.min(), x.max()-x.min()) if len(y) > 0 else 0
+    aspect_ratio = length / width if width > 0 else 0
+    
+    # Closed structure detection using contour hierarchy
+    contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    has_holes = False
+    if hierarchy is not None and hierarchy.any():
+        has_holes = any(h[2] != -1 for h in hierarchy[0])  # Check for child contours
+
+    return junctions, endpoints, aspect_ratio, has_holes
+
+def get_connected_components(binary_image):
+    """Optimized component extraction using OpenCV."""
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(binary_image, connectivity=8)
+    components = []
+    for i in range(1, len(stats)):
+        x, y, w, h = stats[i][:4]
+        component_mask = (labels[y:y+h, x:x+w] == i).astype(np.uint8) * 255
+        components.append((component_mask, (x, y, x+w, y+h))
+    return components
+
+def classify_component(args):
+    """Classification with closed structure detection."""
+    mask, bbox = args
+    junctions, endpoints, aspect_ratio, has_holes = calculate_features(mask)
+    
+    # Immediate classification for closed structures
+    if has_holes:
+        return ('complex', mask, bbox)
+    
+    # Simple structure criteria
+    is_simple = (
+        junctions <= 2 and      # Few branch points
+        endpoints <= 3 and      # Limited terminations
+        aspect_ratio > 4        # Long and narrow
+    )
+    
+    return ('simple', mask, bbox) if is_simple else ('complex', mask, bbox)
+
+def process_large_image(binary_image):
+    """Parallel processing pipeline."""
+    components = get_connected_components(binary_image)
+    with Pool() as pool:
+        results = pool.map(classify_component, components)
+    simple = [r[1:] for r in results if r[0] == 'simple']
+    complex_comps = [r[1:] for r in results if r[0] == 'complex']
+    return simple, complex_comps
+
+# ------------------------- Visualization & Output -------------------------
+
+def create_composite_images(simple_components, complex_components, image_shape):
+    """Generate output images with classified components."""
+    simple_img = np.zeros(image_shape, dtype=np.uint8)
+    complex_img = np.zeros(image_shape, dtype=np.uint8)
+
+    def paste_components(components, target):
+        for mask, (x, y, x2, y2) in components:
+            h, w = mask.shape
+            target[y:y+h, x:x+w] = np.maximum(target[y:y+h, x:x+w], mask)
+
+    paste_components(simple_components, simple_img)
+    paste_components(complex_components, complex_img)
+
+    return simple_img, complex_img
+
+# ------------------------- Example Usage -------------------------
+
+if __name__ == "__main__":
+    # Load your binary image (replace with actual image)
+    binary_image = cv2.imread("metal_lines.png", cv2.IMREAD_GRAYSCALE)
+    _, binary_image = cv2.threshold(binary_image, 127, 255, cv2.THRESH_BINARY)
+    
+    # Process image
+    start_time = time.time()
+    simple_comps, complex_comps = process_large_image(binary_image)
+    simple_img, complex_img = create_composite_images(
+        simple_comps, complex_comps, binary_image.shape
+    )
+    
+    # Save results
+    cv2.imwrite("simple_structures.png", simple_img)
+    cv2.imwrite("complex_structures.png", complex_img)
+    print(f"Processing time: {time.time()-start_time:.2f} seconds")
