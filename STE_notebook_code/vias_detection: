@@ -1058,4 +1058,263 @@ File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\functi
    2832 )
 
 OutOfMemoryError: CUDA out of memory. Tried to allocate 20.00 MiB. GPU 0 has a total capacity of 4.00 GiB of which 2.38 GiB is free. Of the allocated memory 33.96 MiB is allocated by PyTorch, and 12.04 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+//////// new one ///
 
+import os
+import gc
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset
+from torchvision import transforms
+from PIL import Image
+from sklearn.model_selection import train_test_split
+
+# Set environment variable to reduce fragmentation
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
+# GPU configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print("Using device:", device)
+print("GPU memory:", torch.cuda.get_device_properties(device).total_memory / 1024**3, "GB")
+
+# Memory-saving configurations
+MIXED_PRECISION = True
+GRADIENT_CHECKPOINTING = True  # Enable for all blocks
+BATCH_SIZE = 2  # Reduced from 4
+IMG_SIZE = 128  # Reduced from 256
+
+# Load and preprocess data - optimized for grayscale and memory
+def load_data(patch_dir, mask_dir, img_height, img_width):
+    image_paths = sorted([os.path.join(patch_dir, f) for f in os.listdir(patch_dir) if f.endswith('.png')])
+    mask_paths = sorted([os.path.join(mask_dir, f) for f in os.listdir(mask_dir) if f.endswith('.png')])
+    
+    assert len(image_paths) == len(mask_paths), "Image/Mask count mismatch"
+    
+    # Load on demand instead of storing all in memory
+    return image_paths, mask_paths
+
+# Define paths and parameters
+mask_dir = r'C:\Users\spaudel\OneDrive - Micron Technology, Inc\SEM IC Images\Test_Images\vias_mask_combined'
+patch_dir = r'C:\Users\spaudel\OneDrive - Micron Technology, Inc\SEM IC Images\Test_Images\vias_patch_combined'
+
+# Get paths only
+print("Loading data paths...")
+image_paths, mask_paths = load_data(patch_dir, mask_dir, IMG_SIZE, IMG_SIZE)
+X_train, X_val, y_train, y_val = train_test_split(image_paths, mask_paths, test_size=0.2, random_state=42)
+
+print(f"Training samples: {len(X_train)}")
+print(f"Validation samples: {len(X_val)}")
+
+# Custom Dataset with on-demand loading
+class ViaDataset(Dataset):
+    def __init__(self, image_paths, mask_paths, transform=None, img_size=128):
+        self.image_paths = image_paths
+        self.mask_paths = mask_paths
+        self.transform = transform
+        self.img_size = img_size
+        
+    def __len__(self):
+        return len(self.image_paths)
+    
+    def __getitem__(self, idx):
+        # Load image
+        img = Image.open(self.image_paths[idx]).convert('L')
+        mask = Image.open(self.mask_paths[idx]).convert('L')
+        
+        # Resize
+        img = img.resize((self.img_size, self.img_size))
+        mask = mask.resize((self.img_size, self.img_size))
+        
+        # Convert to numpy
+        img = np.array(img, dtype=np.float32) / 255.0
+        mask = np.array(mask, dtype=np.float32) / 255.0
+        mask = (mask > 0.5).astype(np.float32)  # Binarize
+        
+        # Add channel dimension
+        img = np.expand_dims(img, axis=-1)  # (H, W, 1)
+        mask = np.expand_dims(mask, axis=-1)  # (H, W, 1)
+        
+        if self.transform:
+            # Apply same transform to image and mask
+            seed = torch.randint(0, 100000, (1,)).item()
+            
+            torch.manual_seed(seed)
+            img = self.transform(img)
+            
+            torch.manual_seed(seed)
+            mask = self.transform(mask)
+        else:
+            img = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1)
+            mask = torch.tensor(mask, dtype=torch.float32).permute(2, 0, 1)
+            
+        return img, mask
+
+# Simplified transforms
+train_transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.RandomHorizontalFlip(p=0.5),
+])
+
+val_transform = transforms.Compose([
+    transforms.ToTensor()
+])
+
+# Create datasets
+train_dataset = ViaDataset(X_train, y_train, transform=train_transform, img_size=IMG_SIZE)
+val_dataset = ViaDataset(X_val, y_val, transform=val_transform, img_size=IMG_SIZE)
+
+# Reduced batch size and workers
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
+                          pin_memory=True, num_workers=0)
+val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, 
+                        pin_memory=True, num_workers=0)
+
+# Ultra-Lightweight U-Net with Gradient Checkpointing
+class NanoUNet(nn.Module):
+    def __init__(self, in_channels=1, out_channels=1):
+        super().__init__()
+        
+        # Encoder (contracting path)
+        self.enc1 = self._block(in_channels, 8)
+        self.enc2 = self._block(8, 16)
+        self.enc3 = self._block(16, 32)
+        self.pool = nn.MaxPool2d(2)
+        
+        # Bottleneck
+        self.bottleneck = self._block(32, 64)
+        
+        # Decoder (expanding path)
+        self.upconv3 = self._upconv(64, 32)
+        self.dec3 = self._block(64, 32)  # 32 (upconv) + 32 (skip) = 64
+        self.upconv2 = self._upconv(32, 16)
+        self.dec2 = self._block(32, 16)  # 16 (upconv) + 16 (skip) = 32
+        self.upconv1 = self._upconv(16, 8)
+        self.dec1 = self._block(16, 8)  # 8 (upconv) + 8 (skip) = 16
+        
+        # Output layer
+        self.conv_out = nn.Conv2d(8, out_channels, 1)
+        
+    def _block(self, in_channels, features):
+        return nn.Sequential(
+            nn.Conv2d(in_channels, features, 3, padding=1),
+            nn.GroupNorm(1, features),  # Less memory than BatchNorm
+            nn.ReLU(inplace=True),
+            nn.Conv2d(features, features, 3, padding=1),
+            nn.GroupNorm(1, features),
+            nn.ReLU(inplace=True)
+        )
+    
+    def _upconv(self, in_channels, out_channels):
+        return nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
+    
+    def forward(self, x):
+        # Encoder path with gradient checkpointing
+        enc1 = torch.utils.checkpoint.checkpoint(self.enc1, x) if GRADIENT_CHECKPOINTING else self.enc1(x)
+        enc2 = torch.utils.checkpoint.checkpoint(self.enc2, self.pool(enc1)) if GRADIENT_CHECKPOINTING else self.enc2(self.pool(enc1))
+        enc3 = torch.utils.checkpoint.checkpoint(self.enc3, self.pool(enc2)) if GRADIENT_CHECKPOINTING else self.enc3(self.pool(enc2))
+        
+        # Bottleneck
+        bottleneck = torch.utils.checkpoint.checkpoint(self.bottleneck, self.pool(enc3)) if GRADIENT_CHECKPOINTING else self.bottleneck(self.pool(enc3))
+        
+        # Decoder path
+        dec3 = self.upconv3(bottleneck)
+        dec3 = torch.cat((dec3, enc3), dim=1)
+        dec3 = torch.utils.checkpoint.checkpoint(self.dec3, dec3) if GRADIENT_CHECKPOINTING else self.dec3(dec3)
+        
+        dec2 = self.upconv2(dec3)
+        dec2 = torch.cat((dec2, enc2), dim=1)
+        dec2 = torch.utils.checkpoint.checkpoint(self.dec2, dec2) if GRADIENT_CHECKPOINTING else self.dec2(dec2)
+        
+        dec1 = self.upconv1(dec2)
+        dec1 = torch.cat((dec1, enc1), dim=1)
+        dec1 = torch.utils.checkpoint.checkpoint(self.dec1, dec1) if GRADIENT_CHECKPOINTING else self.dec1(dec1)
+        
+        return self.conv_out(dec1)
+
+# Initialize model
+model = NanoUNet(in_channels=1).to(device)
+print(f"Model parameters: {sum(p.numel() for p in model.parameters())/1e6:.2f}M")
+
+# Loss and optimizer
+criterion = nn.BCEWithLogitsLoss()
+optimizer = optim.Adam(model.parameters(), lr=1e-4)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+
+# Mixed precision scaler
+scaler = torch.cuda.amp.GradScaler(enabled=MIXED_PRECISION)
+
+# Memory cleanup function
+def clear_memory():
+    torch.cuda.empty_cache()
+    gc.collect()
+
+# Training loop
+num_epochs = 100
+best_val_loss = float('inf')
+
+print("Starting training...")
+for epoch in range(num_epochs):
+    # Training phase
+    model.train()
+    train_loss = 0.0
+    
+    for i, (images, masks) in enumerate(train_loader):
+        # Clear memory frequently
+        if i % 5 == 0:
+            clear_memory()
+            
+        images, masks = images.to(device, non_blocking=True), masks.to(device, non_blocking=True)
+        
+        optimizer.zero_grad(set_to_none=True)
+        
+        # Mixed precision context
+        with torch.cuda.amp.autocast(enabled=MIXED_PRECISION):
+            outputs = model(images)
+            loss = criterion(outputs, masks)
+        
+        # Backpropagation
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        
+        train_loss += loss.item() * images.size(0)
+        
+        # Clean up intermediate variables
+        del outputs, loss
+    
+    # Validation phase
+    model.eval()
+    val_loss = 0.0
+    with torch.no_grad():
+        for images, masks in val_loader:
+            images, masks = images.to(device), masks.to(device)
+            
+            outputs = model(images)
+            loss = criterion(outputs, masks)
+            val_loss += loss.item() * images.size(0)
+            
+            del outputs, loss
+    
+    # Calculate epoch metrics
+    train_loss /= len(train_loader.dataset)
+    val_loss /= len(val_loader.dataset)
+    scheduler.step(val_loss)
+    
+    print(f"Epoch {epoch+1}/{num_epochs} | "
+          f"Train Loss: {train_loss:.6f} | "
+          f"Val Loss: {val_loss:.6f} | "
+          f"LR: {optimizer.param_groups[0]['lr']:.2e}")
+    
+    # Save best model
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        torch.save(model.state_dict(), 'best_via_model.pth')
+        print(f"Saved new best model with val loss: {val_loss:.6f}")
+    
+    # Clear memory at end of epoch
+    clear_memory()
+
+print("Training complete!")
