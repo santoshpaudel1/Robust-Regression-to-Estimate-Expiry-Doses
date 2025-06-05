@@ -673,3 +673,271 @@ for epoch in range(num_epochs):
         print(f"Saved new best model with val loss: {val_loss:.6f}")
 
 print("Training complete!")
+
+
+
+
+
+////// simple unet////
+
+import os
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset, random_split
+from torchvision import transforms
+from PIL import Image
+from sklearn.model_selection import train_test_split
+
+# GPU configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print("Using device:", device)
+print("GPU memory:", torch.cuda.get_device_properties(device).total_memory / 1024**3, "GB")
+
+# Set to True to enable memory-saving techniques
+MIXED_PRECISION = True
+GRADIENT_CHECKPOINTING = False  # Disabled by default, enable if needed
+
+# Load and preprocess data - optimized for grayscale
+def load_data(patch_dir, mask_dir, img_height, img_width):
+    image_paths = sorted([os.path.join(patch_dir, f) for f in os.listdir(patch_dir) if f.endswith('.png')])
+    mask_paths = sorted([os.path.join(mask_dir, f) for f in os.listdir(mask_dir) if f.endswith('.png')])
+    
+    assert len(image_paths) == len(mask_paths), "Image/Mask count mismatch"
+    
+    # Use uint8 to reduce memory footprint
+    X = np.zeros((len(image_paths), img_height, img_width), dtype=np.uint8)
+    y = np.zeros((len(mask_paths), img_height, img_width), dtype=np.uint8)
+    
+    for i, (img_path, mask_path) in enumerate(zip(image_paths, mask_paths)):
+        # Load as grayscale (single channel)
+        img = Image.open(img_path).convert('L')
+        mask = Image.open(mask_path).convert('L')
+        
+        # Resize if needed
+        if img.size != (img_width, img_height):
+            img = img.resize((img_width, img_height))
+            mask = mask.resize((img_width, img_height))
+        
+        X[i] = np.array(img)
+        y[i] = np.array(mask)
+    
+    return X, y
+
+# Define paths and parameters
+mask_dir = r'C:\Users\spaudel\OneDrive - Micron Technology, Inc\SEM IC Images\Test_Images\vias_mask_combined'
+patch_dir = r'C:\Users\spaudel\OneDrive - Micron Technology, Inc\SEM IC Images\Test_Images\vias_patch_combined'
+img_height, img_width = 256, 256
+
+# Load data
+print("Loading data...")
+X, y = load_data(patch_dir, mask_dir, img_height, img_width)
+
+# Split data - use float32 for processing
+X = X.astype(np.float32) / 255.0
+y = (y.astype(np.float32) / 255.0 > 0.5).astype(np.float32)  # Binarize masks
+
+# Add channel dimension
+X = np.expand_dims(X, axis=-1)  # Shape: (N, H, W, 1)
+y = np.expand_dims(y, axis=-1)  # Shape: (N, H, W, 1)
+
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+print(f"Train shapes: {X_train.shape}, {y_train.shape}")
+print(f"Validation shapes: {X_val.shape}, {y_val.shape}")
+
+# Custom Dataset with memory optimization
+class ViaDataset(Dataset):
+    def __init__(self, images, masks, transform=None):
+        self.images = images
+        self.masks = masks
+        self.transform = transform
+        
+    def __len__(self):
+        return len(self.images)
+    
+    def __getitem__(self, idx):
+        image = self.images[idx]
+        mask = self.masks[idx]
+        
+        if self.transform:
+            # Apply same transform to image and mask
+            seed = torch.randint(0, 100000, (1,)).item()
+            
+            torch.manual_seed(seed)
+            image = self.transform(image)
+            
+            torch.manual_seed(seed)
+            mask = self.transform(mask)
+        else:
+            image = torch.tensor(image, dtype=torch.float32).permute(2, 0, 1)
+            mask = torch.tensor(mask, dtype=torch.float32).permute(2, 0, 1)
+            
+        return image, mask
+
+# Data transforms - simplified for grayscale
+train_transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.RandomRotation(10),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.RandomVerticalFlip(p=0.5)
+])
+
+val_transform = transforms.Compose([
+    transforms.ToTensor()
+])
+
+# Create datasets
+train_dataset = ViaDataset(X_train, y_train, transform=train_transform)
+val_dataset = ViaDataset(X_val, y_val, transform=val_transform)
+
+# Reduced batch size for 4GB GPU
+train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, pin_memory=True)
+
+# Optimized Lightweight U-Net for grayscale
+class LightweightUNet(nn.Module):
+    def __init__(self, in_channels=1, out_channels=1):
+        super().__init__()
+        
+        # Encoder (contracting path)
+        self.enc1 = self._block(in_channels, 16)
+        self.enc2 = self._block(16, 32)
+        self.enc3 = self._block(32, 64)
+        self.enc4 = self._block(64, 128)
+        self.pool = nn.MaxPool2d(2)
+        
+        # Bottleneck
+        self.bottleneck = self._block(128, 256)
+        
+        # Decoder (expanding path)
+        self.upconv4 = self._upconv(256, 128)
+        self.dec4 = self._block(256, 128)  # 128 (upconv) + 128 (skip) = 256
+        self.upconv3 = self._upconv(128, 64)
+        self.dec3 = self._block(128, 64)  # 64 (upconv) + 64 (skip) = 128
+        self.upconv2 = self._upconv(64, 32)
+        self.dec2 = self._block(64, 32)  # 32 (upconv) + 32 (skip) = 64
+        self.upconv1 = self._upconv(32, 16)
+        self.dec1 = self._block(32, 16)  # 16 (upconv) + 16 (skip) = 32
+        
+        # Output layer
+        self.conv_out = nn.Conv2d(16, out_channels, 1)
+        
+        # Gradient checkpointing
+        self.grad_checkpoint = GRADIENT_CHECKPOINTING
+    
+    def _block(self, in_channels, features):
+        return nn.Sequential(
+            nn.Conv2d(in_channels, features, 3, padding=1),
+            nn.BatchNorm2d(features),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(features, features, 3, padding=1),
+            nn.BatchNorm2d(features),
+            nn.ReLU(inplace=True)
+        )
+    
+    def _upconv(self, in_channels, out_channels):
+        return nn.ConvTranspose2d(
+            in_channels, out_channels, kernel_size=2, stride=2
+        )
+    
+    def forward(self, x):
+        # Encoder path
+        enc1 = self.enc1(x)
+        enc2 = self.enc2(self.pool(enc1))
+        enc3 = self.enc3(self.pool(enc2))
+        enc4 = self.enc4(self.pool(enc3))
+        
+        # Bottleneck
+        if self.grad_checkpoint and self.training:
+            bottleneck = torch.utils.checkpoint.checkpoint(self.bottleneck, self.pool(enc4))
+        else:
+            bottleneck = self.bottleneck(self.pool(enc4))
+        
+        # Decoder path with skip connections
+        dec4 = self.upconv4(bottleneck)
+        dec4 = torch.cat((dec4, enc4), dim=1)
+        dec4 = self.dec4(dec4)
+        
+        dec3 = self.upconv3(dec4)
+        dec3 = torch.cat((dec3, enc3), dim=1)
+        dec3 = self.dec3(dec3)
+        
+        dec2 = self.upconv2(dec3)
+        dec2 = torch.cat((dec2, enc2), dim=1)
+        dec2 = self.dec2(dec2)
+        
+        dec1 = self.upconv1(dec2)
+        dec1 = torch.cat((dec1, enc1), dim=1)
+        dec1 = self.dec1(dec1)
+        
+        return self.conv_out(dec1)
+
+# Initialize model
+model = LightweightUNet(in_channels=1).to(device)
+print(f"Model parameters: {sum(p.numel() for p in model.parameters())/1e6:.2f}M")
+
+# Loss and optimizer
+criterion = nn.BCEWithLogitsLoss()  # For binary segmentation
+optimizer = optim.Adam(model.parameters(), lr=1e-4)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+
+# Mixed precision scaler
+scaler = torch.cuda.amp.GradScaler(enabled=MIXED_PRECISION)
+
+# Training loop
+num_epochs = 50
+best_val_loss = float('inf')
+
+print("Starting training...")
+for epoch in range(num_epochs):
+    # Training phase
+    model.train()
+    train_loss = 0.0
+    
+    for images, masks in train_loader:
+        images, masks = images.to(device, non_blocking=True), masks.to(device, non_blocking=True)
+        
+        optimizer.zero_grad(set_to_none=True)
+        
+        # Mixed precision context
+        with torch.cuda.amp.autocast(enabled=MIXED_PRECISION):
+            outputs = model(images)
+            loss = criterion(outputs, masks)
+        
+        # Backpropagation
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        
+        train_loss += loss.item() * images.size(0)
+    
+    # Validation phase
+    model.eval()
+    val_loss = 0.0
+    with torch.no_grad():
+        for images, masks in val_loader:
+            images, masks = images.to(device), masks.to(device)
+            
+            outputs = model(images)
+            loss = criterion(outputs, masks)
+            val_loss += loss.item() * images.size(0)
+    
+    # Calculate epoch metrics
+    train_loss /= len(train_loader.dataset)
+    val_loss /= len(val_loader.dataset)
+    scheduler.step(val_loss)
+    
+    print(f"Epoch {epoch+1}/{num_epochs} | "
+          f"Train Loss: {train_loss:.6f} | "
+          f"Val Loss: {val_loss:.6f} | "
+          f"LR: {optimizer.param_groups[0]['lr']:.2e}")
+    
+    # Save best model
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        torch.save(model.state_dict(), 'best_via_model.pth')
+        print(f"Saved new best model with val loss: {val_loss:.6f}")
+
+print("Training complete!")
