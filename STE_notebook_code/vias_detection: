@@ -1,0 +1,239 @@
+import os
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, Dataset
+from torchvision import transforms
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from sklearn.model_selection import train_test_split
+from efficientnet_pytorch import EfficientNet
+
+# Set the GPU device to GPU1
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
+# Check GPU availability
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print("Using device:", device)
+
+# Load and preprocess the data
+def load_data(patch_dir, mask_dir, img_height, img_width):
+    image_paths = sorted([os.path.join(patch_dir, fname) for fname in os.listdir(patch_dir) if fname.endswith('.png')])
+    mask_paths = sorted([os.path.join(mask_dir, fname) for fname in os.listdir(mask_dir) if fname.endswith('.png')])
+    
+    assert len(image_paths) == len(mask_paths), "Number of images and masks do not match"
+    
+    X = np.zeros((len(image_paths), img_height, img_width, 3), dtype=np.float16)
+    y = np.zeros((len(mask_paths), img_height, img_width, 1), dtype=np.float16)
+    
+    for i in range(len(image_paths)):
+        image = load_img(image_paths[i], target_size=(img_height, img_width))
+        mask = load_img(mask_paths[i], target_size=(img_height, img_width), color_mode='grayscale')
+        
+        X[i] = img_to_array(image) / 255.0
+        y[i] = img_to_array(mask) / 255.0
+    
+    return X, y
+
+# Define image paths
+mask_dir = r'C:\Users\spaudel\OneDrive - Micron Technology, Inc\SEM IC Images\Test_Images\vias_mask_combined'
+patch_dir = r'C:\Users\spaudel\OneDrive - Micron Technology, Inc\SEM IC Images\Test_Images\vias_patch_combined'
+img_height, img_width = 256, 256
+
+# Load the data
+X, y = load_data(patch_dir, mask_dir, img_height, img_width)
+
+# Split the data into training and validation sets
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Custom dataset class
+class CustomDataset(Dataset):
+    def __init__(self, images, masks, transform=None):
+        self.images = images
+        self.masks = masks
+        self.transform = transform
+    
+    def __len__(self):
+        return len(self.images)
+    
+    def __getitem__(self, idx):
+        image = self.images[idx]
+        mask = self.masks[idx]
+        
+        if self.transform:
+            image = self.transform(image)
+            mask = self.transform(mask)
+        
+        return image, mask
+
+# Data augmentation
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.RandomRotation(10),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomVerticalFlip()
+])
+
+train_dataseet = CustomDataset(X_train, y_train, transform=transform)
+val_dataset = CustomDataset(X_val, y_val, transform=transforms.ToTensor())
+
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+
+class UNetPP(nn.Module):
+    def __init__(self, input_shape):
+        super(UNetPP, self).__init__()
+        self.encoder = EfficientNet.from_pretrained('efficientnet-b7')
+        self.encoder._conv_stem.in_channels = input_shape[2]
+        self.encoder._conv_stem = nn.Conv2d(input_shape[2], 64, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+        
+        self.conv_block = nn.Sequential(
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU()
+        )
+        
+        self.upsample_concat_block = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU()
+        )
+        
+        self.final_conv = nn.Conv2d(128, 1, kernel_size=1)
+    
+    def forward(self, x):
+        skips = []
+        for i in [2, 3, 4, 6]:
+            x = self.encoder._blocks[i]  # Apply the block to the input
+            skips.append(x)
+        
+        x = self.encoder.extract_features(x)
+        
+        for i in range(4):
+            x = self.upsample_concat_block(x)
+            x = torch.cat([x, skips[3-i]], dim=1)
+            x = self.conv_block(x)
+        
+        x = self.final_conv(x)
+        return x
+
+
+input_shape = (img_height, img_width, 3)
+model = UNetPP(input_shape).to(device)
+
+# Loss function and optimizer
+criterion = nn.BCEWithLogitsLoss()
+optimizer = optim.Adam(model.parameters(), lr=1e-4)
+
+# Training loop
+num_epochs = 35
+for epoch in range(num_epochs):
+    model.train()
+    for images, masks in train_loader:
+        images, masks = images.to(device), masks.to(device)
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, masks)
+        loss.backward()
+        optimizer.step()
+    
+    model.eval()
+    val_loss = 0
+    with torch.no_grad():
+        for images, masks in val_loader:
+            images, masks = images.to(device), masks.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, masks)
+            val_loss += loss.item()
+    
+    print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss.item()}, Val Loss: {val_loss/len(val_loader)}")
+
+print("Training complete!")
+
+
+############################ error ####################
+
+--------------------------------------------------------------------------
+TypeError                                 Traceback (most recent call last)
+Cell In[41], line 140
+    138 images, masks = images.to(device), masks.to(device)
+    139 optimizer.zero_grad()
+--> 140 outputs = model(images)
+    141 loss = criterion(outputs, masks)
+    142 loss.backward()
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\module.py:1751, in Module._wrapped_call_impl(self, *args, **kwargs)
+   1749     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
+   1750 else:
+-> 1751     return self._call_impl(*args, **kwargs)
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\module.py:1762, in Module._call_impl(self, *args, **kwargs)
+   1757 # If we don't have any hooks, we want to skip the rest of the logic in
+   1758 # this function, and just call forward.
+   1759 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
+   1760         or _global_backward_pre_hooks or _global_backward_hooks
+   1761         or _global_forward_hooks or _global_forward_pre_hooks):
+-> 1762     return forward_call(*args, **kwargs)
+   1764 result = None
+   1765 called_always_called_hooks = set()
+
+Cell In[41], line 115, in UNetPP.forward(self, x)
+    112     x = self.encoder._blocks[i]  # Apply the block to the input
+    113     skips.append(x)
+--> 115 x = self.encoder.extract_features(x)
+    117 for i in range(4):
+    118     x = self.upsample_concat_block(x)
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\efficientnet_pytorch\model.py:289, in EfficientNet.extract_features(self, inputs)
+    279 """use convolution layer to extract feature .
+    280 
+    281 Args:
+   (...)
+    286     layer in the efficientnet model.
+    287 """
+    288 # Stem
+--> 289 x = self._swish(self._bn0(self._conv_stem(inputs)))
+    291 # Blocks
+    292 for idx, block in enumerate(self._blocks):
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\module.py:1751, in Module._wrapped_call_impl(self, *args, **kwargs)
+   1749     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
+   1750 else:
+-> 1751     return self._call_impl(*args, **kwargs)
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\module.py:1762, in Module._call_impl(self, *args, **kwargs)
+   1757 # If we don't have any hooks, we want to skip the rest of the logic in
+   1758 # this function, and just call forward.
+   1759 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
+   1760         or _global_backward_pre_hooks or _global_backward_hooks
+   1761         or _global_forward_hooks or _global_forward_pre_hooks):
+-> 1762     return forward_call(*args, **kwargs)
+   1764 result = None
+   1765 called_always_called_hooks = set()
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\conv.py:554, in Conv2d.forward(self, input)
+    553 def forward(self, input: Tensor) -> Tensor:
+--> 554     return self._conv_forward(input, self.weight, self.bias)
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\conv.py:549, in Conv2d._conv_forward(self, input, weight, bias)
+    537 if self.padding_mode != "zeros":
+    538     return F.conv2d(
+    539         F.pad(
+    540             input, self._reversed_padding_repeated_twice, mode=self.padding_mode
+   (...)
+    547         self.groups,
+    548     )
+--> 549 return F.conv2d(
+    550     input, weight, bias, self.stride, self.padding, self.dilation, self.groups
+    551 )
+
+TypeError: conv2d() received an invalid combination of arguments - got (MBConvBlock, Parameter, NoneType, tuple, tuple, tuple, int), but expected one of:
+ * (Tensor input, Tensor weight, Tensor bias = None, tuple of ints stride = 1, tuple of ints padding = 0, tuple of ints dilation = 1, int groups = 1)
+      didn't match because some of the arguments have invalid types: (MBConvBlock, Parameter, NoneType, tuple of (int, int), tuple of (int, int), tuple of (int, int), int)
+ * (Tensor input, Tensor weight, Tensor bias = None, tuple of ints stride = 1, str padding = "valid", tuple of ints dilation = 1, int groups = 1)
+      didn't match because some of the arguments have invalid types: (MBConvBlock, Parameter, NoneType, tuple of (int, int), tuple of (int, int), tuple of (int, int), int)
