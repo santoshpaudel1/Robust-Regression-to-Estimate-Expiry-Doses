@@ -941,3 +941,121 @@ for epoch in range(num_epochs):
         print(f"Saved new best model with val loss: {val_loss:.6f}")
 
 print("Training complete!")
+
+
+Using device: cuda
+GPU memory: 4.0 GB
+Loading data...
+Train shapes: (94, 256, 256, 1), (94, 256, 256, 1)
+Validation shapes: (24, 256, 256, 1), (24, 256, 256, 1)
+Model parameters: 1.94M
+Starting training...
+C:\Users\spaudel\AppData\Local\Temp\ipykernel_32852\791049120.py:205: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=MIXED_PRECISION)
+C:\Users\spaudel\AppData\Local\Temp\ipykernel_32852\791049120.py:223: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=MIXED_PRECISION):
+---------------------------------------------------------------------------
+OutOfMemoryError                          Traceback (most recent call last)
+Cell In[1], line 224
+    222 # Mixed precision context
+    223 with torch.cuda.amp.autocast(enabled=MIXED_PRECISION):
+--> 224     outputs = model(images)
+    225     loss = criterion(outputs, masks)
+    227 # Backpropagation
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\module.py:1751, in Module._wrapped_call_impl(self, *args, **kwargs)
+   1749     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
+   1750 else:
+-> 1751     return self._call_impl(*args, **kwargs)
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\module.py:1762, in Module._call_impl(self, *args, **kwargs)
+   1757 # If we don't have any hooks, we want to skip the rest of the logic in
+   1758 # this function, and just call forward.
+   1759 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
+   1760         or _global_backward_pre_hooks or _global_backward_hooks
+   1761         or _global_forward_hooks or _global_forward_pre_hooks):
+-> 1762     return forward_call(*args, **kwargs)
+   1764 result = None
+   1765 called_always_called_hooks = set()
+
+Cell In[1], line 165, in LightweightUNet.forward(self, x)
+    163 def forward(self, x):
+    164     # Encoder path
+--> 165     enc1 = self.enc1(x)
+    166     enc2 = self.enc2(self.pool(enc1))
+    167     enc3 = self.enc3(self.pool(enc2))
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\module.py:1751, in Module._wrapped_call_impl(self, *args, **kwargs)
+   1749     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
+   1750 else:
+-> 1751     return self._call_impl(*args, **kwargs)
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\module.py:1762, in Module._call_impl(self, *args, **kwargs)
+   1757 # If we don't have any hooks, we want to skip the rest of the logic in
+   1758 # this function, and just call forward.
+   1759 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
+   1760         or _global_backward_pre_hooks or _global_backward_hooks
+   1761         or _global_forward_hooks or _global_forward_pre_hooks):
+-> 1762     return forward_call(*args, **kwargs)
+   1764 result = None
+   1765 called_always_called_hooks = set()
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\container.py:240, in Sequential.forward(self, input)
+    238 def forward(self, input):
+    239     for module in self:
+--> 240         input = module(input)
+    241     return input
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\module.py:1751, in Module._wrapped_call_impl(self, *args, **kwargs)
+   1749     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
+   1750 else:
+-> 1751     return self._call_impl(*args, **kwargs)
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\module.py:1762, in Module._call_impl(self, *args, **kwargs)
+   1757 # If we don't have any hooks, we want to skip the rest of the logic in
+   1758 # this function, and just call forward.
+   1759 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
+   1760         or _global_backward_pre_hooks or _global_backward_hooks
+   1761         or _global_forward_hooks or _global_forward_pre_hooks):
+-> 1762     return forward_call(*args, **kwargs)
+   1764 result = None
+   1765 called_always_called_hooks = set()
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\modules\batchnorm.py:193, in _BatchNorm.forward(self, input)
+    186     bn_training = (self.running_mean is None) and (self.running_var is None)
+    188 r"""
+    189 Buffers are only updated if they are to be tracked and we are in training mode. Thus they only need to be
+    190 passed when the update should occur (i.e. in training mode when they are tracked), or when buffer stats are
+    191 used for normalization (i.e. in eval mode when buffers are not None).
+    192 """
+--> 193 return F.batch_norm(
+    194     input,
+    195     # If buffers are not to be tracked, ensure that they won't be updated
+    196     self.running_mean
+    197     if not self.training or self.track_running_stats
+    198     else None,
+    199     self.running_var if not self.training or self.track_running_stats else None,
+    200     self.weight,
+    201     self.bias,
+    202     bn_training,
+    203     exponential_average_factor,
+    204     self.eps,
+    205 )
+
+File ~\AppData\Local\Programs\Python\Python311\Lib\site-packages\torch\nn\functional.py:2822, in batch_norm(input, running_mean, running_var, weight, bias, training, momentum, eps)
+   2819 if training:
+   2820     _verify_batch_size(input.size())
+-> 2822 return torch.batch_norm(
+   2823     input,
+   2824     weight,
+   2825     bias,
+   2826     running_mean,
+   2827     running_var,
+   2828     training,
+   2829     momentum,
+   2830     eps,
+   2831     torch.backends.cudnn.enabled,
+   2832 )
+
+OutOfMemoryError: CUDA out of memory. Tried to allocate 20.00 MiB. GPU 0 has a total capacity of 4.00 GiB of which 2.38 GiB is free. Of the allocated memory 33.96 MiB is allocated by PyTorch, and 12.04 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
