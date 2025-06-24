@@ -713,3 +713,21 @@ def erode_vias_boundary_in_metal_lines(metal_lines_img, vias_img):
 
     # Save the result image
     return eroded_metal_lines
+
+
+
+import cv2
+import numpy as np
+
+def erode_vias_boundary_in_metal_lines(metal_lines_img, vias_img):
+    # Create a cross-shaped kernel to expand vias vertically/horizontally
+    kernel = np.array([[0, 1, 0],
+                       [1, 1, 1],
+                       [0, 1, 0]], dtype=np.uint8)
+    
+    # Dilate vias: expand via regions by 1 pixel in 4 directions
+    vias_expanded = cv2.dilate(vias_img, kernel, iterations=1)
+    
+    # Remove expanded via regions from metal lines
+    result = cv2.bitwise_and(metal_lines_img, cv2.bitwise_not(vias_expanded))
+    return result
