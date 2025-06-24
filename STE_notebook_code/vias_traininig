@@ -895,4 +895,52 @@ def trim_metal_shorts(metal_lines, vias, line_width=3):
 
 
 
+import cv2
+import numpy as np
+
+def break_shorts_at_vias(metal_lines, vias):
+    """Break metal line shorts at via locations by removing specific pixels"""
+    # Create removal masks for different directions
+    remove_north = np.roll(vias, -1, axis=0)  # Pixel directly above via
+    remove_south = np.roll(vias, 1, axis=0)   # Pixel directly below via
+    remove_east = np.roll(vias, 1, axis=1)    # Pixel directly right of via
+    remove_west = np.roll(vias, -1, axis=1)   # Pixel directly left of via
+    
+    # Combine removal masks for vertical and horizontal shorts
+    remove_vertical = np.logical_or(remove_north, remove_south)  # Break horizontal line shorts
+    remove_horizontal = np.logical_or(remove_east, remove_west)   # Break vertical line shorts
+    
+    # Create final removal mask
+    removal_mask = np.logical_or(remove_vertical, remove_horizontal)
+    
+    # Remove targeted pixels from metal lines
+    result = metal_lines.copy()
+    result[removal_mask] = 0
+    
+    return result
+
+
+def break_shorts_at_vias(metal_lines, vias, line_width=3):
+    """For thicker metal lines with known width"""
+    # Create offset arrays for all positions to remove
+    offsets = []
+    for i in range(-(line_width//2), (line_width//2)+1):
+        if i != 0:  # Skip center pixel
+            offsets.append((i, 0))  # Vertical offsets
+            offsets.append((0, i))  # Horizontal offsets
+    
+    # Create removal mask
+    removal_mask = np.zeros_like(metal_lines, dtype=bool)
+    for dy, dx in offsets:
+        shifted = np.roll(vias, dy, axis=0)
+        shifted = np.roll(shifted, dx, axis=1)
+        removal_mask = np.logical_or(removal_mask, shifted)
+    
+    # Apply removal
+    result = metal_lines.copy()
+    result[removal_mask] = 0
+    return result
+
+
+
 
