@@ -855,5 +855,44 @@ def break_metal_shorts_enhanced(metal_lines, vias):
     return result
 
 
+import cv2
+import numpy as np
+
+def trim_metal_shorts(metal_lines, vias, line_width=3):
+    """
+    Breaks shorts by trimming swollen via regions to match normal line width
+    line_width: typical width of your metal lines in pixels
+    """
+    # Create trimming kernels based on line width
+    vertical_trim_kernel = np.ones((line_width, 1), dtype=np.uint8)   # For horizontal lines
+    horizontal_trim_kernel = np.ones((1, line_width), dtype=np.uint8)  # For vertical lines
+    
+    # Create masks for horizontal and vertical lines
+    horizontal_lines = cv2.morphologyEx(metal_lines, cv2.MORPH_OPEN, 
+                                        cv2.getStructuringElement(cv2.MORPH_RECT, (15,1)))
+    vertical_lines = cv2.morphologyEx(metal_lines, cv2.MORPH_OPEN, 
+                                      cv2.getStructuringElement(cv2.MORPH_RECT, (1,15)))
+    
+    # Process horizontal lines: trim vertical dimension
+    trimmed_horizontal = cv2.erode(horizontal_lines, vertical_trim_kernel)
+    trimmed_horizontal = cv2.dilate(trimmed_horizontal, vertical_trim_kernel)
+    
+    # Process vertical lines: trim horizontal dimension
+    trimmed_vertical = cv2.erode(vertical_lines, horizontal_trim_kernel)
+    trimmed_vertical = cv2.dilate(trimmed_vertical, horizontal_trim_kernel)
+    
+    # Combine results only in via regions
+    result = metal_lines.copy()
+    via_regions = cv2.dilate(vias, np.ones((3,3), iterations=1)
+    
+    # Apply horizontal trimming in via regions
+    result = np.where(via_regions & horizontal_lines, trimmed_horizontal, result)
+    
+    # Apply vertical trimming in via regions
+    result = np.where(via_regions & vertical_lines, trimmed_vertical, result)
+    
+    return result.astype(np.uint8) * 255
+
+
 
 
