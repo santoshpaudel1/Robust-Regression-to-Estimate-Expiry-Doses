@@ -688,3 +688,28 @@ def visualize_results(model, dataloader, num_samples=3):
 
 # Visualize validation results
 visualize_results(model, val_loader, num_samples=5)
+
+
+
+
+
+def erode_vias_boundary_in_metal_lines(metal_lines_img, vias_img):
+ 
+    contours, _ = cv2.findContours(vias_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Create a copy of the metal lines image to erode
+    eroded_metal_lines = metal_lines_img.copy()
+
+    # Erode the boundary of each via contour in the metal lines image
+    kernel = np.ones((3, 3), np.uint8)
+    for contour in contours:
+        # Create a mask for the current contour
+        contour_mask = np.zeros_like(vias_img)
+        cv2.drawContours(contour_mask, [contour], -1, 255, thickness=cv2.FILLED)
+        
+        # Erode the boundary of the contour in the metal lines image
+        eroded_boundary = cv2.erode(contour_mask, kernel, iterations=1)
+        eroded_metal_lines = cv2.bitwise_and(eroded_metal_lines, eroded_boundary)
+
+    # Save the result image
+    return eroded_metal_lines
