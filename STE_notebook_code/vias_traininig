@@ -762,3 +762,98 @@ def break_metal_shorts(metal_lines, vias):
     cleaned_metal[remove_vert_shorts > 0] = vertical_metal[remove_vert_shorts > 0]
     
     return cleaned_metal
+
+
+
+import cv2
+import numpy as np
+
+def break_metal_shorts(metal_lines, vias):
+    """Break shorts between parallel metal lines in via regions while preserving line continuity"""
+    # Create directional kernels
+    horizontal_kernel = np.array([[0, 0, 0],
+                                  [1, 1, 1],
+                                  [0, 0, 0]], dtype=np.uint8)
+    vertical_kernel = np.array([[0, 1, 0],
+                                [0, 1, 0],
+                                [0, 1, 0]], dtype=np.uint8)
+
+    # Detect horizontal metal lines
+    horizontal_metal = cv2.morphologyEx(metal_lines, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
+    
+    # Detect vertical metal lines
+    vertical_metal = cv2.morphologyEx(metal_lines, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
+    
+    # Create removal masks
+    remove_horiz_shorts = cv2.dilate(vias, vertical_kernel, iterations=1)
+    remove_vert_shorts = cv2.dilate(vias, horizontal_kernel, iterations=1)
+    
+    # Apply selective removal
+    cleaned_metal = metal_lines.copy()
+    cleaned_metal[remove_horiz_shorts > 0] = horizontal_metal[remove_horiz_shorts > 0]
+    cleaned_metal[remove_vert_shorts > 0] = vertical_metal[remove_vert_shorts > 0]
+    
+    return cleaned_metal
+
+
+import cv2
+import numpy as np
+
+def remove_metal_shorts(metal_lines, vias):
+    """Break shorts between metal lines at via locations by targeted pixel removal"""
+    # Create a cross-shaped removal kernel
+    kernel = np.array([[0, 1, 0],
+                       [1, 1, 1],
+                       [0, 1, 0]], dtype=np.uint8)
+    
+    # Expand vias by 1 pixel in all directions
+    expanded_vias = cv2.dilate(vias, kernel, iterations=1)
+    
+    # Remove metal pixels ONLY in expanded via regions
+    return cv2.subtract(metal_lines, expanded_vias)
+
+import cv2
+import numpy as np
+
+def break_metal_shorts(metal_lines, vias):
+    # Create directional removal kernels
+    remove_vertical_shorts = np.array([[1, 0, 1]], dtype=np.uint8)    # Removes pixels above/below
+    remove_horizontal_shorts = np.array([[1], [0], [1]], dtype=np.uint8)  # Removes pixels left/right
+    
+    # Expand vias to cover metal regions causing shorts
+    vias_vertical = cv2.dilate(vias, remove_vertical_shorts, iterations=1)
+    vias_horizontal = cv2.dilate(vias, remove_horizontal_shorts, iterations=1)
+    
+    # Create removal mask targeting only short areas
+    removal_mask = cv2.bitwise_or(vias_vertical, vias_horizontal)
+    
+    # Remove ONLY the problem pixels
+    result = metal_lines.copy()
+    result[removal_mask > 0] = 0
+    
+    return result
+
+
+
+def break_metal_shorts_enhanced(metal_lines, vias):
+    # Initial removal
+    temp = break_metal_shorts(metal_lines, vias)
+    
+    # Directional erosion to clean residual connections
+    vertical_kernel = np.ones((3,1), np.uint8)  # Vertical erosion kernel
+    horizontal_kernel = np.ones((1,3), np.uint8)  # Horizontal erosion kernel
+    
+    # Apply only in via regions
+    vias_expanded = cv2.dilate(vias, np.ones((3,3), np.uint8))
+    eroded_vertical = cv2.erode(temp, vertical_kernel)
+    eroded_horizontal = cv2.erode(temp, horizontal_kernel)
+    
+    # Combine results
+    result = temp.copy()
+    result[vias_expanded>0] = np.maximum(eroded_vertical, eroded_horizontal)[vias_expanded>0]
+    
+    return result
+
+
+
+
