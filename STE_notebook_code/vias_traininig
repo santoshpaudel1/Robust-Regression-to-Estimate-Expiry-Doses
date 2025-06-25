@@ -1048,4 +1048,58 @@ processed_metal = erode_via_regions(
 
 
 
+######################### This is the new method that seperate the vias cluster ####################
+
+
+import numpy as np
+import cv2
+from sklearn.cluster import DBSCAN
+
+def cluster_vias(vias_img, min_samples=5, eps=1):
+    """Cluster vias based on proximity and classify them into two groups"""
+    # Get the coordinates of the vias
+    via_coords = np.argwhere(vias_img == 255)
+    
+    # Apply DBSCAN clustering
+    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(via_coords)
+    
+    # Get the labels assigned by DBSCAN
+    labels = clustering.labels_
+    
+    # Separate vias into two groups based on labels
+    nearby_vias = np.zeros_like(vias_img)
+    other_vias = np.zeros_like(vias_img)
+    
+    for i, label in enumerate(labels):
+        y, x = via_coords[i]
+        if label != -1:  # Nearby vias (clustered)
+            nearby_vias[y, x] = 255
+        else:  # Other vias (not clustered)
+            other_vias[y, x] = 255
+    
+    return nearby_vias, other_vias
+
+def erode_via_regions(metal_lines, vias, effect_radius=2, erosion_strength=1):
+    """More controlled version with separate radius and erosion parameters"""
+    # Create via region mask
+    region_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*effect_radius+1, 2*effect_radius+1))
+    via_regions = cv2.dilate(vias, region_kernel)
+    
+    # Create erosion kernel
+    erosion_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*erosion_strength+1, 2*erosion_strength+1))
+    
+    # Erode metal lines (entire image)
+    eroded_metal = cv2.erode(metal_lines, erosion_kernel)
+    
+    # Apply erosion only in via regions
+    return np.where(via_regions > 0, eroded_metal, metal_lines)
+
+
+# Cluster the vias into two groups
+nearby_vias_M2, other_vias_M2 = cluster_vias(vias_M2)
+
+# Use the other group (not clustered) vias on the function
+final_image = erode_via_regions(metal_lines_M2, other_vias_M2, effect_radius=2, erosion_strength=1)
+
+
 
