@@ -974,6 +974,78 @@ def erode_via_regions(metal_lines, vias, effect_radius=2, erosion_strength=1):
     return np.where(via_regions > 0, eroded_metal, metal_lines)
 
 
+################################
+import cv2
+import numpy as np
+from scipy.spatial import cKDTree  # Efficient spatial queries
+
+def erode_via_regions(metal_lines, vias, effect_radius=2, erosion_strength=1, 
+                      dense_radius=10, min_dense_count=5):
+    """
+    Erodes metal lines only around sparsely distributed vias, avoiding dense clusters.
+    
+    Args:
+        metal_lines (numpy.ndarray): Binary image of metal lines
+        vias (numpy.ndarray): Binary image of vias
+        effect_radius (int): Radius for defining erosion influence zones
+        erosion_strength (int): Intensity of erosion applied to metal lines
+        dense_radius (int): Radius to check for dense via clusters
+        min_dense_count (int): Minimum vias in neighborhood to be considered a cluster
+    
+    Returns:
+        numpy.ndarray: Modified metal lines image
+    """
+    # Validate inputs and handle case with no vias
+    vias = vias.astype(np.uint8)
+    if np.count_nonzero(vias) == 0:
+        return metal_lines
+
+    # Label individual vias and get centroids
+    num_labels, labels, _, centroids = cv2.connectedComponentsWithStats(vias, connectivity=8)
+    if num_labels <= 1:  # Only background component
+        return metal_lines
+
+    # Extract valid centroids (skip background)
+    centroids = centroids[1:]  # Shape: [num_vias, 2]
+    num_vias = centroids.shape[0]
+
+    # Compute via density using KDTree for spatial queries
+    tree = cKDTree(centroids)
+    counts = tree.query_ball_point(centroids, r=dense_radius, return_length=True)
+
+    # Create mask for sparse vias (not in dense clusters)
+    sparse_vias_mask = np.zeros_like(vias, dtype=np.uint8)
+    for i in range(num_vias):
+        if counts[i] < min_dense_count:  # Sparse via
+            sparse_vias_mask[labels == (i + 1)] = 255  # +1 for component ID
+
+    # Define erosion influence zones
+    region_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, 
+        (2 * effect_radius + 1, 2 * effect_radius + 1)
+    )
+    erosion_zones = cv2.dilate(sparse_vias_mask, region_kernel)
+
+    # Apply selective erosion
+    erosion_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, 
+        (2 * erosion_strength + 1, 2 * erosion_strength + 1)
+    )
+    eroded_metal = cv2.erode(metal_lines, erosion_kernel)
+    
+    # Combine results - only modify sparse via regions
+    return np.where(erosion_zones > 0, eroded_metal, metal_lines)
+
+# Assuming metal_lines and vias are binary numpy arrays
+processed_metal = erode_via_regions(
+    metal_lines, 
+    vias,
+    effect_radius=3,        # Larger influence zone
+    erosion_strength=1,      # Mild erosion
+    dense_radius=15,         # Cluster detection radius
+    min_dense_count=5        # Minimum vias to be considered cluster
+)
+
 
 
 
