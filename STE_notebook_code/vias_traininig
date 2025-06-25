@@ -1102,4 +1102,69 @@ nearby_vias_M2, other_vias_M2 = cluster_vias(vias_M2)
 final_image = erode_via_regions(metal_lines_M2, other_vias_M2, effect_radius=2, erosion_strength=1)
 
 
+##################################################xxxx######################################
+
+import cv2
+import numpy as np
+
+def erode_sparse_vias(metal_lines, vias, 
+                      effect_radius=2, erosion_strength=1,
+                      cluster_radius=10, min_dense_count=5):
+    """
+    Fast erosion for sparse vias while preserving clustered regions
+    using morphological operations and convolution.
+    
+    Args:
+        metal_lines: Binary metal lines image (0/255)
+        vias: Binary vias image (0/255)
+        effect_radius: Erosion influence radius (pixels)
+        erosion_strength: Erosion kernel size (pixels)
+        cluster_radius: Neighborhood radius for density check (pixels)
+        min_dense_count: Minimum vias to consider area clustered
+    """
+    # Convert vias to 0/1 format
+    vias_01 = vias.astype(np.uint8) // 255
+    
+    # Create density check kernel (circular neighborhood)
+    kernel_size = 2 * cluster_radius + 1
+    density_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
+    )
+    
+    # Compute via density using convolution
+    density_map = cv2.filter2D(
+        vias_01, cv2.CV_16U, density_kernel, borderType=cv2.BORDER_CONSTANT
+    )
+    
+    # Identify sparse vias (count < threshold)
+    sparse_vias = np.zeros_like(vias, dtype=np.uint8)
+    sparse_mask = (vias_01 > 0) & (density_map < min_dense_count)
+    sparse_vias[sparse_mask] = 255
+
+    # Create erosion influence zones
+    region_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2*effect_radius+1, 2*effect_radius+1)
+    )
+    erosion_zones = cv2.dilate(sparse_vias, region_kernel)
+    
+    # Apply selective erosion
+    erosion_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2*erosion_strength+1, 2*erosion_strength+1)
+    )
+    eroded_metal = cv2.erode(metal_lines, erosion_kernel)
+    
+    # Combine results
+    return np.where(erosion_zones > 0, eroded_metal, metal_lines)
+
+for rad, cnt in test_params:
+    test_result = erode_sparse_vias(
+        metal_lines, vias,
+        cluster_radius=rad,
+        min_dense_count=cnt,
+        effect_radius=3,
+        erosion_strength=1
+    )
+    cv2.imwrite(f"params_rad{rad}_cnt{cnt}.png", test_result)
+
+
 
