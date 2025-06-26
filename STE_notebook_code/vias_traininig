@@ -1167,4 +1167,42 @@ for rad, cnt in test_params:
     cv2.imwrite(f"params_rad{rad}_cnt{cnt}.png", test_result)
 
 
+import cv2
+import numpy as np
+
+def erode_vertical_around_vias(metal_lines, vias, vertical_erosion=5, horizontal_padding=1):
+    """
+    Erodes metal vertically around vias to prevent vertical shorts while maintaining horizontal connections.
+    Creates elliptical via shapes by eroding vertically more than horizontally.
+    
+    Args:
+        metal_lines: Binary image of metal lines (0 or 255)
+        vias: Binary image of vias (0 or 255)
+        vertical_erosion: Strength of vertical erosion (pixels above/below via to erode)
+        horizontal_padding: Horizontal padding around vias to protect from erosion
+    """
+    # Create protective padding around vias horizontally
+    pad_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2*horizontal_padding + 1, 1))
+    protected_vias = cv2.dilate(vias, pad_kernel)
+    
+    # Create vertical erosion kernel (tall and narrow)
+    kernel_height = 2 * vertical_erosion + 1
+    erosion_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, kernel_height))
+    
+    # Erode metal everywhere using vertical kernel
+    eroded_metal = cv2.erode(metal_lines, erosion_kernel)
+    
+    # Create via region mask (original vias plus vertical erosion zones)
+    via_region = cv2.dilate(vias, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    
+    # Apply erosion only in via regions, but protect horizontal connections near vias
+    result = np.where(
+        (via_region > 0) & (protected_vias == 0),  # Apply erosion only in via regions outside protected zone
+        eroded_metal,
+        metal_lines
+    )
+    
+    return result
+
+
 
