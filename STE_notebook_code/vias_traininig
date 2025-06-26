@@ -1204,5 +1204,108 @@ def erode_vertical_around_vias(metal_lines, vias, vertical_erosion=5, horizontal
     
     return result
 
+import cv2
+import numpy as np
+from scipy.ndimage import label, generate_binary_structure
+
+def fast_trim_swollen_vias(metal_lines, vias, max_width=5, search_dist=10):
+    """
+    Vectorized via swelling correction using run-length analysis
+    Processes all vias simultaneously without individual contours
+    """
+    # Ensure binary images
+    metal_lines = (metal_lines > 0).astype(np.uint8)
+    vias = (vias > 0).astype(np.uint8)
+    
+    # Create reference width map
+    ref_width = horizontal_runlength(metal_lines)
+    
+    # Identify via regions
+    via_mask = vias.copy()
+    
+    # Measure width at via locations
+    via_widths = np.where(via_mask, ref_width, 0)
+    
+    # Find reference widths above/below vias
+    above_ref = shift_and_sample(ref_width, via_mask, -search_dist)
+    below_ref = shift_and_sample(ref_width, via_mask, search_dist)
+    
+    # Determine target width (min of adjacent references)
+    target_width = np.minimum(above_ref, below_ref)
+    valid_mask = (target_width > 0) & (target_width < max_width)
+    
+    # Create trim mask where swelling exists
+    needs_trim = valid_mask & (via_widths > target_width)
+    trim_mask = np.zeros_like(metal_lines)
+    trim_mask[needs_trim] = 1
+    
+    # Expand trim mask to full swollen region
+    trim_mask = grow_to_width(trim_mask, ref_width)
+    
+    # Apply trimming erosion
+    result = metal_lines.copy()
+    trim_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    trimmed = cv2.erode(metal_lines, trim_kernel)
+    
+    # Apply only to swollen regions
+    result[trim_mask > 0] = trimmed[trim_mask > 0]
+    
+    return result.astype(np.uint8) * 255
+
+def horizontal_runlength(binary_img):
+    """Compute horizontal run-length at each pixel"""
+    padded = np.pad(binary_img, ((0, 0), (1, 1)), mode='constant')
+    diff = np.diff(padded.astype(np.int8), axis=1)
+    
+    # Find start/end indices of runs
+    starts = np.where(diff == 1)
+    ends = np.where(diff == -1)
+    
+    # Create run-length map
+    run_map = np.zeros_like(binary_img, dtype=np.int16)
+    
+    for y, xs in zip(starts[0], starts[1]):
+        xe = ends[1][(ends[0] == y) & (ends[1] > xs)][0]
+        run_length = xe - xs
+        run_map[y, xs] = run_length
+    
+    # Propagate run lengths horizontally
+    for y in range(run_map.shape[0]):
+        row = run_map[y]
+        nonzero = row.nonzero()[0]
+        if len(nonzero) == 0:
+            continue
+        segments = np.split(row, nonzero)
+        for seg in segments:
+            if seg.size > 0 and seg[0] > 0:
+                seg[:] = seg[0]
+    
+    return run_map
+
+def shift_and_sample(ref_map, mask, shift_y):
+    """Shift and sample reference values"""
+    shifted = np.roll(mask, shift_y, axis=0)
+    if shift_y > 0:
+        shifted[:shift_y, :] = 0
+    else:
+        shifted[shift_y:, :] = 0
+    return np.where(shifted, ref_map, 0)
+
+def grow_to_width(mask, width_map):
+    """Expand mask to cover full swollen width"""
+    struct = generate_binary_structure(2, 2)
+    labeled, num_features = label(mask, struct)
+    
+    for i in range(1, num_features + 1):
+        component = (labeled == i)
+        y, x = np.where(component)
+        if len(x) == 0:
+            continue
+        w = int(np.median(width_map[component]))
+        xmin, xmax = max(0, x.min() - w//2), min(mask.shape[1], x.max() + w//2)
+        mask[y.min():y.max() + 1, xmin:xmax] = 1
+    
+    return mask
+
 
 
