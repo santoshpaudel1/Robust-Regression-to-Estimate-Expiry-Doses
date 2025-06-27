@@ -1,0 +1,2127 @@
+import os
+#os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+import cv2
+import numpy as np
+from skimage.measure import label
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+from skimage.morphology import skeletonize
+import matplotlib.pyplot as plt
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+from skimage.morphology import skeletonize
+from sklearn.cluster import DBSCAN
+import networkx as nx
+from skimage.util import img_as_bool
+import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.cluster import DBSCAN
+from collections import defaultdict
+import time
+import bisect
+from rtree import index
+from scipy.spatial import cKDTree
+import gc
+import math 
+from skimage.morphology import skeletonize, erosion, dilation, disk
+from skimage.measure import label
+from scipy.sparse import csr_matrix
+from tensorflow.image import resize
+import gc
+import os
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from PIL import Image
+
+%matplotlib widget 
+
+image_path_M0 = '/home/spaudel/IC_images/Test_Image_150_Hynix/2_M0.png' 
+image_path_M1 = '/home/spaudel/IC_images/Test_Image_150_Hynix/2_M1.png' 
+image_path_M2 = '/home/spaudel/IC_images/Test_Image_150_Hynix/2_M2.png'
+image_path_M3 = '/home/spaudel/IC_images/Test_Image_150_Hynix/2_M3.png'
+image_path_M4 = '/home/spaudel/IC_images/Test_Image_150_Hynix/2_M4.png'
+
+# Read the images
+M0_sample = cv2.imread(image_path_M0, cv2.IMREAD_GRAYSCALE)
+M1_sample = cv2.imread(image_path_M1, cv2.IMREAD_GRAYSCALE)
+M2_sample = cv2.imread(image_path_M2, cv2.IMREAD_GRAYSCALE)
+M3_sample = cv2.imread(image_path_M3, cv2.IMREAD_GRAYSCALE)
+M4_sample = cv2.imread(image_path_M4, cv2.IMREAD_GRAYSCALE)
+
+
+# convert the image into same shape 
+height, width = M0_sample.shape
+M1_sample = M1_sample[:height, :width]
+M2_sample = M2_sample[:height, :width]
+M3_sample = M3_sample[:height, :width]
+M4_sample = M4_sample[:height, :width]
+
+
+## all primary functions here ###
+ 
+
+def adaptive_thresholding(M1_sample, threshold):
+    """
+    Apply adaptive thresholding to the input image.
+    
+    Parameters:
+    M1_sample (numpy.ndarray): Input image.
+    
+    Returns:
+    numpy.ndarray: Thresholded binary image.
+    """
+    median_pixel = np.median(M1_sample)
+    for i in range(0, 140, 10):
+        ret, thresh_metal_lines_M1 = cv2.threshold(M1_sample, median_pixel - i, 255, cv2.THRESH_BINARY)
+        high_intensity_pixel_gt_one_percent = thresh_metal_lines_M1.sum() / (M1_sample.shape[0] * M1_sample.shape[1] * 255) * 100
+        if high_intensity_pixel_gt_one_percent > threshold:
+            break
+    return thresh_metal_lines_M1
+
+def skeletonize_image(binary_img):
+    """
+    Apply skeletonization to the binary image.
+    
+    Parameters:
+    binary_img (numpy.ndarray): Binary image.
+    
+    Returns:
+    numpy.ndarray: Skeletonized image.
+    """
+    skeleton = skeletonize(binary_img, method='lee')
+    return (skeleton * 255).astype(np.uint8)
+
+def extract_line_segments(skeleton_uint8):
+    """
+    Extract line segments from the skeletonized image.
+    
+    Parameters:
+    skeleton_uint8 (numpy.ndarray): Skeletonized image.
+    
+    Returns:
+    list: List of line segments.
+    """
+    contours, _ = cv2.findContours(skeleton_uint8, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    line_segments = []
+    label_counter = 1
+    for contour in contours:
+        for i in range(len(contour) - 1):
+            x1, y1 = contour[i][0]
+            x2, y2 = contour[i + 1][0]
+            line_segments.append({'label': label_counter, 'start': (x1, y1), 'end': (x2, y2)})
+            label_counter += 1
+    return line_segments
+
+
+def extract_lines_from_skeleton(skeleton_img):
+    """Preserve original duplicate checking logic with speed optimizations"""
+    lines = []
+    line_set = set()
+   
+    contours = cv2.findContours(skeleton_img, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)[0]
+    for contour in contours:
+        epsilon = 0.0000001 * cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, epsilon, True)
+       
+        for i in range(len(approx) - 1):
+            start = tuple(approx[i][0])
+            end = tuple(approx[i+1][0])
+           
+            # Original duplicate check logic (order-sensitive)
+            key1 = (start, end)
+            key2 = (end, start)
+            if key1 not in line_set and key2 not in line_set:
+                line_set.add(key1)
+                line_set.add(key2)
+                lines.append({'start': start, 'end': end})
+   
+    return lines
+
+
+def merge_lines(lines):
+    """Keep original merging behavior with adjacency speedup"""
+    merged = []
+    used = [False] * len(lines)
+    adj = defaultdict(list)
+   
+    # Build adjacency map for faster lookups
+    for idx, line in enumerate(lines):
+        adj[line['start']].append(idx)
+        adj[line['end']].append(idx)
+   
+    for i in range(len(lines)):
+        if used[i]: continue
+       
+        current = lines[i]
+        polyline = [current['start'], current['end']]
+        used[i] = True
+       
+        # Use adjacency map instead of full scan
+        while True:
+            found = False
+            candidates = adj[polyline[-1]] + adj[polyline[0]]
+           
+            for j in candidates:
+                if used[j]: continue
+               
+                other = lines[j]
+                os, oe = other['start'], other['end']
+               
+                if os == polyline[-1]:
+                    polyline.append(oe)
+                    used[j] = True
+                    found = True
+                elif oe == polyline[-1]:
+                    polyline.append(os)
+                    used[j] = True
+                    found = True
+                elif os == polyline[0]:
+                    polyline.insert(0, oe)
+                    used[j] = True
+                    found = True
+                elif oe == polyline[0]:
+                    polyline.insert(0, os)
+                    used[j] = True
+                    found = True
+           
+            if not found: break
+       
+        merged.append({'start': polyline[0], 'end': polyline[-1]})
+   
+    return merged
+
+
+def refine_orthogonal_connections(lines):
+    """Optimized with precomputed lengths and vectorization"""
+    # Precompute all lengths first
+    lengths = [math.hypot(l['end'][0]-l['start'][0], l['end'][1]-l['start'][1])
+               for l in lines]
+   
+    short_lines = [l for l, length in zip(lines, lengths) if length < 6]
+    long_lines = [l for l, length in zip(lines, lengths) if length >= 6]
+   
+    merged_short = merge_lines(short_lines)
+    refined = []
+   
+    for line in merged_short:
+        dx = line['end'][0] - line['start'][0]
+        dy = line['end'][1] - line['start'][1]
+       
+        if dx and dy:
+            mid = (line['end'][0], line['start'][1])  # Original L-shape logic
+            refined.extend([{'start': line['start'], 'end': mid},
+                           {'start': mid, 'end': line['end']}])
+        else:
+            refined.append(line)
+   
+    return refined + long_lines
+
+# Keep refine_orthogonal_connections_II identical
+def refine_orthogonal_connections_II(lines):
+    """Replace inclined lines with orthogonal connections while maintaining connectivity"""
+    refined = []
+   
+    for line in lines:
+        start = line['start']
+        end = line['end']
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+       
+        # If line is diagonal, replace with L-shape
+        if dx != 0 and dy != 0:
+            # Create horizontal then vertical connection
+            mid = (end[0], start[1])  # Horizontal first
+            refined.append({'start': start, 'end': mid})
+            refined.append({'start': mid, 'end': end})
+        else:
+            # Keep horizontal/vertical lines as-is
+            refined.append(line)
+   
+    return refined
+
+def snap_to_axis(line):
+    """
+    Snap the line to the nearest axis (horizontal or vertical).
+    
+    Parameters:
+    line (list): Line coordinates [x1, y1, x2, y2].
+    
+    Returns:
+    list: Snapped line coordinates [x1, y1, x2, y2].
+    """
+    x1, y1, x2, y2 = line
+    if abs(y1 - y2) < abs(x1 - x2):  # Horizontal line
+        y2 = y1
+    elif abs(x1 - x2) < abs(y1 - y2):  # Vertical line
+        x2 = x1
+    return [x1, y1, x2, y2]
+
+def assign_line_ids(line_segments):
+    """
+    Assign unique IDs to each line segment and categorize them.
+    
+    Parameters:
+    line_segments (list): List of line segments.
+    
+    Returns:
+    tuple: Dictionaries and lists of line segments and their IDs.
+    """
+    line_dict_M1 = {}
+    coordinates_dict_M1 = {}
+    horizontal_lines_ids = []
+    vertical_lines_ids = []
+    neither_vertical_nor_horizontal_lines_ids = []
+
+    for idx, segment in enumerate(line_segments):
+        x1, y1 = segment['start']
+        x2, y2 = segment['end']
+        snapped_line = snap_to_axis([x1, y1, x2, y2])
+        line_dict_M1[idx] = snapped_line
+        coordinates_dict_M1[idx] = {'start': (x1, y1), 'end': (x2, y2)}
+        if snapped_line[1] == snapped_line[3]:  # Horizontal line
+            horizontal_lines_ids.append(idx)
+        elif snapped_line[0] == snapped_line[2]:  # Vertical line
+            vertical_lines_ids.append(idx)
+        else:  # Neither vertical nor horizontal line
+            neither_vertical_nor_horizontal_lines_ids.append(idx)
+
+    return line_dict_M1, coordinates_dict_M1, horizontal_lines_ids, vertical_lines_ids
+
+def create_dataframe(line_dict, line_ids):
+    """
+    Create a DataFrame from the selected lines.
+    
+    Parameters:
+    line_dict (dict): Dictionary of line segments.
+    line_ids (list): List of line IDs.
+    
+    Returns:
+    pandas.DataFrame: DataFrame of selected lines.
+    """
+    selected_lines_data = []
+    for idx in line_ids:
+        if idx in line_dict:
+            line = line_dict[idx]
+            x1, y1, x2, y2 = line
+            selected_lines_data.append({'ID': idx, 'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
+    return pd.DataFrame(selected_lines_data)
+
+
+def group_lines(df, eps_primary=2, eps_secondary=3, min_samples=1, primary_axis='y'):
+    """
+    Group lines using DBSCAN clustering and a graph-based approach.
+    
+    Parameters:
+    df (pandas.DataFrame): DataFrame of lines.
+    eps_primary (float): DBSCAN epsilon for primary axis.
+    eps_secondary (float): DBSCAN epsilon for secondary axis.
+    min_samples (int): Minimum samples for DBSCAN.
+    primary_axis (str): Primary axis for grouping ('y' or 'x').
+    
+    Returns:
+    pandas.DataFrame: DataFrame with grouped lines.
+    """
+    if df.empty:
+        return df
+        
+    if primary_axis == 'y':
+        primary_coords = df[['y1', 'y2']].mean(axis=1).values.reshape(-1, 1)
+        secondary_coords = np.vstack((df['x1'].values, df['x2'].values)).T
+    else:
+        primary_coords = df[['x1', 'x2']].mean(axis=1).values.reshape(-1, 1)
+        secondary_coords = np.vstack((df['y1'].values, df['y2'].values)).T
+    
+    primary_clustering = DBSCAN(eps=eps_primary, min_samples=min_samples).fit(primary_coords)
+    df['primary_group'] = primary_clustering.labels_
+    
+    df['group'] = -1
+    current_group = 0
+    
+    for primary_group in np.unique(df['primary_group']):
+        if primary_group == -1:
+            continue
+        group_df = df[df['primary_group'] == primary_group]
+        if len(group_df) > 1:
+            G = nx.Graph()
+            for i, (coord1, coord2) in enumerate(secondary_coords[group_df.index]):
+                G.add_node(i, coord1=coord1, coord2=coord2)
+            
+            for i in range(len(group_df)):
+                for j in range(i + 1, len(group_df)):
+                    if abs(secondary_coords[group_df.index[i]][0] - secondary_coords[group_df.index[j]][1]) <= eps_secondary or abs(secondary_coords[group_df.index[i]][1] - secondary_coords[group_df.index[j]][0]) <= eps_secondary:
+                        G.add_edge(i, j)
+            
+            components = list(nx.connected_components(G))
+            for component in components:
+                for idx in component:
+                    df.loc[group_df.index[idx], 'group'] = current_group
+                current_group += 1
+        else:
+            df.loc[group_df.index, 'group'] = current_group
+            current_group += 1
+    
+    return df
+
+ 
+
+def replace_lines_with_group(df, primary_axis='y'):
+    """
+    Replace lines with a single line per group.
+    
+    Parameters:
+    df (pandas.DataFrame): DataFrame of grouped lines.
+    primary_axis (str): Primary axis for grouping ('y' or 'x').
+    
+    Returns:
+    list: List of new lines.
+    """
+    new_lines = []
+    if df.empty:
+        return new_lines
+        
+    for group in df['group'].unique():
+        group_df = df[df['group'] == group]
+        if primary_axis == 'y':
+            min_coord = group_df[['x1', 'x2']].min().min()
+            max_coord = group_df[['x1', 'x2']].max().max()
+            avg_coord = group_df[['y1', 'y2']].mean().mean()
+            new_lines.append([min_coord, avg_coord, max_coord, avg_coord])
+        else:
+            min_coord = group_df[['y1', 'y2']].min().min()
+            max_coord = group_df[['y1', 'y2']].max().max()
+            avg_coord = group_df[['x1', 'x2']].mean().mean()
+            new_lines.append([avg_coord, min_coord, avg_coord, max_coord])
+    return new_lines
+
+def group_lines_I(df, primary_axis='y', pixel_offset=2):
+    """
+    Group lines that:
+    - Have primary coordinates within `pixel_offset` of each other.
+    - Overlap or touch on the secondary axis.
+    """
+    # Extract primary and secondary coordinates
+    if primary_axis == 'y':
+        primary_coords = df[['y1', 'y2']].mean(axis=1).values.reshape(-1, 1)
+        secondary_coords = np.vstack((df['x1'].values, df['x2'].values)).T
+    else:
+        primary_coords = df[['x1', 'x2']].mean(axis=1).values.reshape(-1, 1)
+        secondary_coords = np.vstack((df['y1'].values, df['y2'].values)).T
+   
+    df['group'] = -1
+    current_group = 0
+
+    # Create a KD-tree for efficient neighbor search
+    tree = KDTree(primary_coords)
+    neighbors = tree.query_radius(primary_coords, r=pixel_offset)
+
+    # Create a graph to group lines with primary coordinates within `pixel_offset`
+    G = nx.Graph()
+    for i, neighbor_indices in enumerate(neighbors):
+        G.add_node(i, primary_coord=primary_coords[i][0])
+        for j in neighbor_indices:
+            if i != j:
+                G.add_edge(i, j)
+   
+    # Assign group IDs based on connected components
+    components = list(nx.connected_components(G))
+    for component in components:
+        group_df = df.iloc[list(component)]
+        if len(group_df) > 1:
+            # Check for overlap/touch on the secondary axis
+            G_secondary = nx.Graph()
+            for i, idx in enumerate(group_df.index):
+                coord1, coord2 = secondary_coords[idx]
+                sorted_coords = sorted([coord1, coord2])
+                G_secondary.add_node(i, start=sorted_coords[0], end=sorted_coords[1])
+           
+            for i in range(len(group_df)):
+                for j in range(i + 1, len(group_df)):
+                    node_i = G_secondary.nodes[i]
+                    node_j = G_secondary.nodes[j]
+                    if (node_i['start'] <= node_j['end'] and
+                        node_j['start'] <= node_i['end']):
+                        G_secondary.add_edge(i, j)
+           
+            # Assign group IDs
+            secondary_components = list(nx.connected_components(G_secondary))
+            for component in secondary_components:
+                for idx in component:
+                    df.loc[group_df.index[idx], 'group'] = current_group
+                current_group += 1
+        else:
+            df.loc[group_df.index, 'group'] = current_group
+            current_group += 1
+
+    return df
+
+
+
+def extend_vertical_lines_to_touch_horizontal(new_lines_vertical, new_lines_horizontal, max_gap=8):
+    """
+    Extend vertical lines to touch horizontal lines.
+    
+    Parameters:
+    new_lines_vertical (list): List of vertical lines.
+    new_lines_horizontal (list): List of horizontal lines.
+    max_gap (int): Maximum gap to extend lines.
+    
+    Returns:
+    list: List of extended vertical lines.
+    """
+    extended_lines_vertical = []
+    for v_line in new_lines_vertical:
+        x1, y1, x2, y2 = v_line
+        closest_h_line_above = [h_line for h_line in new_lines_horizontal if h_line[1] < y1 and abs(y1 - h_line[1]) <= max_gap]
+        closest_h_line_below = [h_line for h_line in new_lines_horizontal if h_line[1] > y2 and abs(h_line[1] - y2) <= max_gap]
+        
+        if closest_h_line_above:
+            closest_above_y = max(closest_h_line_above, key=lambda h: h[1])[1]
+            y1 = closest_above_y
+        
+        if closest_h_line_below:
+            closest_below_y = min(closest_h_line_below, key=lambda h: h[1])[1]
+            y2 = closest_below_y
+        
+        extended_lines_vertical.append([x1, y1, x2, y2])
+    return extended_lines_vertical
+
+def extend_horizontal_lines_to_touch_vertical(new_lines_horizontal, new_lines_vertical, max_gap=8):
+    
+    extended_lines_horizontal = []
+    for h_line in new_lines_horizontal:
+        x1, y1, x2, y2 = h_line
+        # Check the end points of the horizontal line and find the closest vertical lines within the max_gap distance
+        closest_v_line_left = [v_line for v_line in new_lines_vertical if v_line[0] < x1 and abs(x1 - v_line[0]) <= max_gap]
+        closest_v_line_right = [v_line for v_line in new_lines_vertical if v_line[0] > x2 and abs(v_line[0] - x2) <= max_gap]
+        
+        if closest_v_line_left:
+            closest_left_x = max(closest_v_line_left, key=lambda v: v[0])[0]
+            x1 = closest_left_x
+        
+        if closest_v_line_right:
+            closest_right_x = min(closest_v_line_right, key=lambda v: v[0])[0]
+            x2 = closest_right_x
+        extended_lines_horizontal.append([x1, y1, x2, y2])
+    return extended_lines_horizontal
+
+
+
+def find_crossing_points(vertical_lines, horizontal_lines):
+    """
+    Find crossing points for vertical lines.
+    
+    Parameters:
+    vertical_lines (pandas.DataFrame): DataFrame of vertical lines.
+    horizontal_lines (pandas.DataFrame): DataFrame of horizontal lines.
+    
+    Returns:
+    dict: Dictionary of crossing points.
+    """
+    crossing_points = {}
+    for v_idx, v_line in vertical_lines.iterrows():
+        v_x = v_line['x1']
+        v_y1 = v_line['y1']
+        v_y2 = v_line['y2']
+        crossings = []
+        for h_idx, h_line in horizontal_lines.iterrows():
+            h_y = h_line['y1']
+            h_x1 = h_line['x1']
+            h_x2 = h_line['x2']
+            if h_x1 <= v_x <= h_x2 and v_y1 <= h_y <= v_y2:
+                crossings.append((v_x, h_y))
+        crossing_points[v_idx] = sorted(crossings, key=lambda p: p[1])
+    return crossing_points
+
+def split_vertical_lines(vertical_lines, crossing_points):
+    """
+    Split vertical lines at crossing points.
+    
+    Parameters:
+    vertical_lines (pandas.DataFrame): DataFrame of vertical lines.
+    crossing_points (dict): Dictionary of crossing points.
+    
+    Returns:
+    list: List of split vertical lines.
+    """
+    new_vertical_lines = []
+    for v_idx, v_line in vertical_lines.iterrows():
+        v_start = (v_line['x1'], v_line['y1'])
+        v_end = (v_line['x2'], v_line['y2'])
+        crossings = crossing_points[v_idx]
+        if crossings:
+            current_start = v_start
+            for crossing in crossings:
+                new_vertical_lines.append({'start': current_start, 'end': crossing})
+                current_start = crossing
+            new_vertical_lines.append({'start': current_start, 'end': v_end})
+        else:
+            new_vertical_lines.append({'start': v_start, 'end': v_end})
+    return new_vertical_lines
+
+def plot_split_lines(split_lines, color, shape):
+    """
+    Plot the split vertical lines.
+    
+    Parameters:
+    split_lines (list): List of split vertical lines.
+    color (tuple): Color for the lines.
+    shape (tuple): Shape of the image.
+    
+    Returns:
+    numpy.ndarray: Image with plotted lines.
+    """
+    split_lines_image = np.zeros((*shape, 3), dtype=np.uint8)
+    for line in split_lines:
+        x1, y1, x2, y2 = line['x1'], line['y1'], line['x2'], line['y2']
+        cv2.line(split_lines_image, (int(x1), int(y1)), (int(x2), int(y2)), color, 1)
+    return split_lines_image
+
+def plot_new_lines(new_lines, color, shape):
+    """
+    Plot the new horizontal and vertical lines.
+    
+    Parameters:
+    new_lines (list): List of new lines.
+    color (tuple): Color for the lines.
+    shape (tuple): Shape of the image.
+    
+    Returns:
+    numpy.ndarray: Image with plotted lines.
+    """
+    new_lines_image = np.zeros((*shape, 3), dtype=np.uint8)
+    for line in new_lines:
+        x1, y1, x2, y2 = line
+        cv2.line(new_lines_image, (int(x1), int(y1)), (int(x2), int(y2)), color, 1)
+    return new_lines_image
+
+def getConnectedComponents(segmentation):
+    """
+    Get all connected components in the segmentation, sorted by size.
+    
+    Parameters:
+    segmentation (numpy.ndarray): Segmentation image.
+    
+    Returns:
+    dict: Dictionary of connected components sorted by size.
+    """
+    labels = label(segmentation)
+    component_sizes = np.bincount(labels.ravel())
+    sorted_components = np.argsort(component_sizes)[::-1]  # Sort components from largest to smallest
+    sorted_components = sorted_components[sorted_components != 0]  # Exclude background label (0)
+    
+    connected_components = {}
+    for i, component in enumerate(sorted_components):
+        mask = labels == component
+        if np.any(mask):
+            connected_components[i] = mask
+    
+    return connected_components
+
+
+
+def plot_final_lines(horizontal_lines, vertical_lines, shape):
+    """
+    Plot the final horizontal and vertical lines on the image.
+    
+    Parameters:
+    horizontal_lines (list): List of final horizontal lines.
+    vertical_lines (list): List of final vertical lines.
+    shape (tuple): Shape of the image.
+    
+    Returns:
+    numpy.ndarray: Image with plotted lines.
+    """
+    final_image = np.zeros((*shape, 3), dtype=np.uint8)
+    for _, row in horizontal_lines.iterrows():
+        x1, y1, x2, y2 = row
+        cv2.line(final_image, (int(x1), int(y1)), (int(x2), int(y2)), (0,0,255), 1)
+    for _, row in vertical_lines.iterrows():
+        x1, y1, x2, y2 = row
+        cv2.line(final_image, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,255), 1)
+    return final_image
+
+
+def getConnectedComponents_1(segmentation):
+    """
+    Get all connected components in the segmentation, sorted by size and filtered by size.
+    
+    Parameters:
+    segmentation (numpy.ndarray): Segmentation image.
+    
+    Returns:
+    dict: Dictionary of connected components sorted by size and filtered by size.
+    """
+    labels = label(segmentation)
+    component_sizes = np.bincount(labels.ravel())
+    sorted_components = np.argsort(component_sizes)[::-1]  # Sort components from largest to smallest
+    sorted_components = sorted_components[sorted_components != 0]  # Exclude background label (0)
+    
+    connected_components = {}
+    for i, component in enumerate(sorted_components):
+        mask = labels == component
+        if np.any(mask) and np.sum(mask) < 20:  # Check if the component size is greater than 2
+            connected_components[i] = mask
+    
+    return connected_components
+
+
+
+def getConnectedComponents(segmentation):
+    """
+    Get all connected components in the segmentation, sorted by size.
+    
+    Parameters:
+    segmentation (numpy.ndarray): Segmentation image.
+    
+    Returns:
+    dict: Dictionary of connected components sorted by size.
+    """
+    labels = label(segmentation)
+    component_sizes = np.bincount(labels.ravel())
+    sorted_components = np.argsort(component_sizes)[::-1]  # Sort components from largest to smallest
+    sorted_components = sorted_components[sorted_components != 0]  # Exclude background label (0)
+    
+    connected_components = {}
+    for i, component in enumerate(sorted_components):
+        mask = labels == component
+        if np.any(mask):
+            connected_components[i] = mask
+    
+    return connected_components
+
+
+def detect_vias(M_sample, threshold_percentage, contour_size):
+    """
+    Detect vias in the given sample metal layer and return the image with vias and their surrounding area filled with white pixels.
+    
+    Parameters:
+    M_sample (numpy.ndarray): The input sample image.
+    threshold_percentage (float): The percentage threshold to determine high-intensity pixels.
+    contour_size (int): The maximum size of the contours to be detected.
+    
+    Returns:
+    numpy.ndarray: The image with vias and their surrounding area filled with white pixels.
+    list: A list of centroids of the detected vias.
+    """
+    max_pixel = M_sample.max(axis=(0, 1))
+
+    for i in range(0, 100, 10):
+        ret, thresh = cv2.threshold(M_sample, max_pixel - i, 255, cv2.THRESH_BINARY)
+        high_intensity_pixel_gt_one_percent = thresh.sum() / (M_sample.shape[0] * M_sample.shape[1] * 255) * 100
+        if high_intensity_pixel_gt_one_percent > threshold_percentage:
+            break
+
+    kernel = np.ones((3,3), np.uint8)
+    dilate = cv2.dilate(thresh, kernel, 1)
+
+    contours, hierarchy = cv2.findContours(image=dilate, mode=cv2.RETR_TREE, method=cv2.CHAIN_APPROX_NONE)
+    # Filter contours based on length
+    contours = [cnt for cnt in contours if cv2.arcLength(cnt, True) <= contour_size]
+
+    image_copy = M_sample.copy()
+    cv2.drawContours(image=image_copy, contours=contours, contourIdx=-1, color=(255, 0, 0), thickness=1, lineType=cv2.LINE_AA)
+    
+    # Calculate centroids
+    centroids = []
+    for cnt in contours:
+        M = cv2.moments(cnt)
+        if M["m00"] != 0:
+            cX = (M["m10"] / M["m00"])
+            cY = (M["m01"] / M["m00"])
+            centroids.append((cX, cY))
+
+    # Return the image copy and centroids
+    return image_copy, centroids
+
+
+
+def find_crossing_points_optimized(vertical_lines, horizontal_lines):
+    """
+    Find crossing points between vertical and horizontal lines.
+    
+    Parameters:
+    vertical_lines (pd.DataFrame): DataFrame containing vertical lines with columns ['x1', 'y1', 'x2', 'y2'].
+    horizontal_lines (pd.DataFrame): DataFrame containing horizontal lines with columns ['x1', 'y1', 'x2', 'y2'].
+    
+    Returns:
+    dict: Dictionary with vertical line indices as keys and lists of crossing points as values.
+    """
+    start_time = time.time()
+    
+    # Sort horizontal lines by their y1 coordinate
+    sorted_horizontal = horizontal_lines.sort_values(by='y1')
+    sorted_y = sorted_horizontal['y1'].to_numpy()
+    sorted_x1 = sorted_horizontal['x1'].to_numpy()
+    sorted_x2 = sorted_horizontal['x2'].to_numpy()
+   
+    crossing_points = {}
+    for v_idx, v_line in vertical_lines.iterrows():
+        v_x = v_line['x1']
+        v_y1 = min(v_line['y1'], v_line['y2'])
+        v_y2 = max(v_line['y1'], v_line['y2'])
+       
+        # Find horizontal lines in the vertical line's y range using binary search
+        left = bisect.bisect_left(sorted_y, v_y1)
+        right = bisect.bisect_right(sorted_y, v_y2)
+       
+        # Vectorized check for x coordinate overlap
+        x1_subset = sorted_x1[left:right]
+        x2_subset = sorted_x2[left:right]
+        y_subset = sorted_y[left:right]
+       
+        # Find valid crossings using numpy array operations
+        mask = (v_x >= x1_subset) & (v_x <= x2_subset)
+        crossings_y = y_subset[mask]
+       
+        # Store crossing points (already sorted due to initial y-sorting)
+        crossing_points[v_idx] = [(v_x, y) for y in crossings_y]
+   
+    print(f"Time taken: {time.time() - start_time} seconds")
+    return crossing_points
+
+def split_vertical_lines(vertical_lines, crossing_points):
+    """
+    Split vertical lines at crossing points.
+    
+    Parameters:
+    vertical_lines (pd.DataFrame): DataFrame containing vertical lines with columns ['x1', 'y1', 'x2', 'y2'].
+    crossing_points (dict): Dictionary with vertical line indices as keys and lists of crossing points as values.
+    
+    Returns:
+    list: List of dictionaries representing new vertical lines with keys 'start' and 'end'.
+    """
+    new_vertical_lines = []
+    for v_idx, v_line in vertical_lines.iterrows():
+        v_start = (v_line['x1'], v_line['y1'])
+        v_end = (v_line['x2'], v_line['y2'])
+        crossings = crossing_points.get(v_idx, [])
+       
+        current_start = v_start
+        for crossing in crossings:
+            new_vertical_lines.append({'start': current_start, 'end': crossing})
+            current_start = crossing
+        new_vertical_lines.append({'start': current_start, 'end': v_end})
+   
+    return new_vertical_lines
+
+
+def optimized_find_intersections(df_m0, df_m1, tol=1e-9):
+    """
+    Find intersections between M0 and M1 lines with spatial indexing.
+    
+    Parameters:
+    df_m0 (pd.DataFrame): DataFrame containing M0 lines with columns ['x1', 'y1', 'x2', 'y2'].
+    df_m1 (pd.DataFrame): DataFrame containing M1 lines with columns ['x1', 'y1', 'x2', 'y2'].
+    tol (float): Tolerance for floating-point comparisons.
+    
+    Returns:
+    np.ndarray: Array of intersection points.
+    """
+    m0_lines = df_m0[['x1', 'y1', 'x2', 'y2']].to_numpy()
+    m1_lines = df_m1[['x1', 'y1', 'x2', 'y2']].to_numpy()
+
+    # Build R-tree index for M1 lines
+    idx = index.Index()
+    for i, (x1, y1, x2, y2) in enumerate(m1_lines):
+        idx.insert(i, (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
+
+    intersections = []
+    for x1, y1, x2, y2 in m0_lines:
+        # Query candidates
+        bbox = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+        candidates = list(idx.intersection(bbox))
+        if not candidates:
+            continue
+
+        # Get candidate lines
+        candidates = m1_lines[candidates]
+        x3 = candidates[:, 0]
+        y3 = candidates[:, 1]
+        x4 = candidates[:, 2]
+        y4 = candidates[:, 3]
+
+        # Vectorized calculations
+        dx1 = x2 - x1
+        dy1 = y2 - y1
+        dx2 = x4 - x3
+        dy2 = y4 - y3
+
+        denom = dx1 * dy2 - dy1 * dx2
+        mask = np.abs(denom) > tol
+        valid_denom = denom[mask]
+
+        # Critical fix: Use -denom in denominator
+        with np.errstate(divide='ignore', invalid='ignore'):
+            t_numerator = (x1 - x3[mask]) * dy2[mask] - (y1 - y3[mask]) * dx2[mask]
+            t = t_numerator / -valid_denom  # Fix applied here
+
+            u_numerator = (x1 - x3[mask]) * dy1 - (y1 - y3[mask]) * dx1
+            u = u_numerator / -valid_denom  # Fix applied here
+
+        # Validate parameters
+        valid = (
+            (t >= -tol) & (t <= 1 + tol) &
+            (u >= -tol) & (u <= 1 + tol)
+        )
+        px = x1 + t[valid] * dx1
+        py = y1 + t[valid] * dy1
+
+        # Store unique points
+        unique_points = np.unique(np.column_stack((px, py)), axis=0)
+        intersections.extend(unique_points)
+
+    return np.array(intersections) if intersections else np.empty((0, 2))
+
+
+
+def optimized_adjust_vias_intersection(vias, intersections, radius=4):
+    """
+    Adjust via positions using KDTree nearest neighbor search and capture adjusted centroids and intersections to split.
+    
+    Parameters:
+    vias (numpy.ndarray): Array of via positions.
+    intersections (numpy.ndarray): Array of intersection positions.
+    radius (int): The radius within which to search for nearest intersections.
+    
+    Returns:
+    numpy.ndarray: Adjusted via positions.
+    list: List of adjusted centroids.
+    list: List of intersections to split.
+    """
+    if intersections.size == 0:
+        return vias, [], []
+   
+    tree = cKDTree(intersections)
+    distances, indices = tree.query(vias, k=1, distance_upper_bound=radius)
+    
+    # Handle out-of-bound indices gracefully by replacing them with original via positions
+    adjusted_indices = np.where(indices < len(intersections), indices, -1)
+    adjusted_vias = np.where(distances[:, None] <= radius,
+                             np.where(adjusted_indices[:, None] != -1,
+                                      intersections[adjusted_indices],
+                                      vias),
+                             vias)
+    
+    # Capture adjusted centroids and intersections to split
+    adjusted_centroids_1 = []
+    intersection_to_split = []
+    
+    for i, (cX, cY) in enumerate(vias):
+        if distances[i] <= radius and adjusted_indices[i] != -1:
+            ix, iy = intersections[adjusted_indices[i]]
+            adjusted_centroids_1.append((ix, iy))
+            intersection_to_split.append((ix, iy))
+        else:
+            adjusted_centroids_1.append((cX, cY))
+    
+    return adjusted_centroids_1, intersection_to_split
+
+
+
+def split_horizontal_lines_at_via_crossing(horizontal_lines, crossing_points):
+    """
+    Split horizontal lines at via crossing points.
+    
+    Parameters:
+    horizontal_lines (pd.DataFrame): DataFrame containing horizontal lines with columns ['x1', 'y1', 'x2', 'y2'].
+    crossing_points (list): List of crossing points as tuples (x, y).
+    
+    Returns:
+    pd.DataFrame: DataFrame containing new horizontal lines with columns ['x1', 'y1', 'x2', 'y2'].
+    """
+    new_horizontal_lines = []
+    for h_idx, h_line in horizontal_lines.iterrows():
+        h_start = (h_line['x1'], h_line['y1'])
+        h_end = (h_line['x2'], h_line['y2'])
+        current_start = h_start
+        # Filter and sort crossing points
+        sorted_crossings = sorted([crossing for crossing in crossing_points if abs(crossing[1] - h_start[1]) <= 1 and h_start[0] <= crossing[0] <= h_end[0]], key=lambda x: x[0])
+        for crossing in sorted_crossings:
+            new_horizontal_lines.append({'x1': current_start[0], 'y1': current_start[1], 'x2': crossing[0], 'y2': h_start[1]})
+            current_start = (crossing[0], h_start[1])
+        new_horizontal_lines.append({'x1': current_start[0], 'y1': current_start[1], 'x2': h_end[0], 'y2': h_end[1]})
+    return pd.DataFrame(new_horizontal_lines)
+
+def split_vertical_lines_at_via_crossing(vertical_lines, crossing_points):
+    """
+    Split vertical lines at via crossing points.
+    
+    Parameters:
+    vertical_lines (pd.DataFrame): DataFrame containing vertical lines with columns ['x1', 'y1', 'x2', 'y2'].
+    crossing_points (list): List of crossing points as tuples (x, y).
+    
+    Returns:
+    pd.DataFrame: DataFrame containing new vertical lines with columns ['x1', 'y1', 'x2', 'y2'].
+    """
+    new_vertical_lines = []
+    for v_idx, v_line in vertical_lines.iterrows():
+        v_start = (v_line['x1'], v_line['y1'])
+        v_end = (v_line['x2'], v_line['y2'])
+        current_start = v_start
+        sorted_crossings = sorted([crossing for crossing in crossing_points if abs(crossing[0] - current_start[0]) <= 1 and current_start[1] <= crossing[1] <= v_end[1]], key=lambda x: x[1])
+        for crossing in sorted_crossings:
+            new_vertical_lines.append({'x1': current_start[0], 'y1': current_start[1], 'x2': current_start[0], 'y2': crossing[1]})
+            current_start = (current_start[0], crossing[1])
+        new_vertical_lines.append({'x1': current_start[0], 'y1': current_start[1], 'x2': v_end[0], 'y2': v_end[1]})
+    return pd.DataFrame(new_vertical_lines)
+
+def skeletonize_image_erosion_dilation(binary_img):
+    """
+    Apply skeletonization to the binary image with preprocessing.
+    
+    Parameters:
+    binary_img (numpy.ndarray): Binary image.
+    
+    Returns:
+    numpy.ndarray: Skeletonized image.
+    """
+    # Preprocessing: Apply erosion and dilation
+    binary_img = erosion(binary_img, disk(1))
+    binary_img = dilation(binary_img, disk(1))
+    
+    # Skeletonization using an alternative method
+    skeleton = skeletonize(binary_img)
+    return (skeleton * 255).astype(np.uint8)
+
+
+
+def getConnectedComponents_skeleton(image):
+    """
+    Get all connected components in the image, sorted by size.
+    
+    Parameters:
+    image (numpy.ndarray): Input image.
+    
+    Returns:
+    dict: Dictionary of connected components sorted by size.
+    """
+    labels = label(image)
+    component_sizes = np.bincount(labels.ravel())
+    sorted_components = np.argsort(component_sizes)[::-1]  # Sort components from largest to smallest
+    sorted_components = sorted_components[sorted_components != 0]  # Exclude background label (0)
+    
+    connected_components = {}
+    for i, component in enumerate(sorted_components):
+        mask = labels == component
+        if np.any(mask):
+            connected_components[i] = mask
+    
+    return connected_components
+
+from skimage.measure import label
+import numpy as np
+from scipy.sparse import csr_matrix
+
+# def getConnectedComponents_skeleton_sparse(image):
+#     """
+#     Get all connected components in the image, sorted by size.
+    
+#     Parameters:
+#     image (numpy.ndarray): Input image.
+    
+#     Returns:
+#     dict: Dictionary of connected components sorted by size.
+#     """
+#     labels = label(image)
+#     component_sizes = np.bincount(labels.ravel())
+#     sorted_components = np.argsort(component_sizes)[::-1]  # Sort components from largest to smallest
+#     sorted_components = sorted_components[sorted_components != 0]  # Exclude background label (0)
+    
+#     connected_components = {}
+#     for i, component in enumerate(sorted_components):
+#         mask = labels == component
+#         if np.any(mask):
+#             # Convert mask to a sparse matrix
+#             sparse_mask = csr_matrix(mask)
+#             connected_components[i] = sparse_mask
+    
+#     return connected_components
+
+from skimage.measure import label
+import numpy as np
+from scipy.sparse import csr_matrix
+import gc
+
+def getConnectedComponents_skeleton_sparse(image):
+    """
+    Get all connected components in the image, sorted by size.
+    
+    Parameters:
+    image (numpy.ndarray): Input image.
+    
+    Returns:
+    dict: Dictionary of connected components sorted by size.
+    """
+    labels = label(image)
+    component_sizes = np.bincount(labels.ravel())
+    sorted_components = np.argsort(component_sizes)[::-1]  # Sort components from largest to smallest
+    sorted_components = sorted_components[sorted_components != 0]  # Exclude background label (0)
+    
+    connected_components = {}
+    for i, component in enumerate(sorted_components):
+        mask = labels == component
+        if np.any(mask):
+            # Convert mask to a sparse matrix
+            sparse_mask = csr_matrix(mask)
+            connected_components[i] = sparse_mask
+        # Explicitly call garbage collector
+        gc.collect()
+    
+    return connected_components
+
+
+def skeletonize_image(binary_img):
+    """
+    Apply skeletonization to the binary image.
+    
+    Parameters:
+    binary_img (numpy.ndarray): Binary image.
+    
+    Returns:
+    numpy.ndarray: Skeletonized image.
+    """
+    skeleton = skeletonize(binary_img)
+    return (skeleton * 255).astype(np.uint8)
+
+
+
+
+
+def extract_dummy_non_dummy_components(binary_image, centroids):
+    """
+    Accurately separates dummy and non-dummy components by checking a neighborhood 
+    around each centroid to handle coordinate rounding issues.
+
+    Parameters:
+    binary_image (numpy.ndarray): Binary image with connected components.
+    centroids (list of tuples): List of (x, y) coordinates (floats or integers).
+
+    Returns:
+    tuple: Two binary images (dummy_components, non_dummy_components)
+    """
+    # Convert to 8-bit binary image format
+    bin_image = (binary_image * 255).astype(np.uint8)
+    
+    # Label connected components
+    num_labels, labels_im = cv2.connectedComponents(bin_image)
+    height, width = labels_im.shape
+
+    non_dummy_labels = set()
+    
+    # Check a 3x3 neighborhood around each centroid's rounded position
+    for (x, y) in centroids:
+        x_center = int(round(x))
+        y_center = int(round(y))
+        
+        # Check all pixels in 3x3 grid around centroid
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                x_int = x_center + dx
+                y_int = y_center + dy
+                
+                # Verify bounds before checking label
+                if 0 <= x_int < width and 0 <= y_int < height:
+                    label = labels_im[y_int, x_int]
+                    if label != 0:
+                        non_dummy_labels.add(label)
+
+    # Create component masks using vectorized operations
+    non_dummy_mask = np.isin(labels_im, list(non_dummy_labels))
+    non_dummy_components = (non_dummy_mask * 255).astype(np.uint8)
+    
+    dummy_mask = (labels_im != 0) & ~non_dummy_mask
+    dummy_components = (dummy_mask * 255).astype(np.uint8)
+
+    return dummy_components, non_dummy_components
+
+
+
+def detect_vias(M_sample, threshold_percentage, contour_size):
+    """
+    Detect vias in the given sample metal layer and return the image with vias and their surrounding area filled with white pixels.
+    
+    Parameters:
+    M_sample (numpy.ndarray): The input sample image.
+    threshold_percentage (float): The percentage threshold to determine high-intensity pixels.
+    contour_size (int): The maximum size of the contours to be detected.
+    
+    Returns:
+    numpy.ndarray: The image with vias and their surrounding area filled with white pixels.
+    list: A list of centroids of the detected vias.
+    """
+    max_pixel = M_sample.max(axis=(0, 1))
+
+    for i in range(0, 100, 10):
+        ret, thresh = cv2.threshold(M_sample, max_pixel - i, 255, cv2.THRESH_BINARY)
+        high_intensity_pixel_gt_one_percent = thresh.sum() / (M_sample.shape[0] * M_sample.shape[1] * 255) * 100
+        if high_intensity_pixel_gt_one_percent > threshold_percentage:
+            break
+
+    kernel = np.ones((3,3), np.uint8)
+    dilate = cv2.dilate(thresh, kernel, 1)
+
+    contours, hierarchy = cv2.findContours(image=dilate, mode=cv2.RETR_TREE, method=cv2.CHAIN_APPROX_NONE)
+    # Filter contours based on length
+    contours = [cnt for cnt in contours if cv2.arcLength(cnt, True) <= contour_size]
+
+    image_copy = M_sample.copy()
+    cv2.drawContours(image=image_copy, contours=contours, contourIdx=-1, color=(0, 255, 0), thickness=1, lineType=cv2.LINE_AA)
+    
+    # Calculate centroids
+    centroids = []
+    for cnt in contours:
+        M = cv2.moments(cnt)
+        if M["m00"] != 0:
+            cX = (M["m10"] / M["m00"])
+            cY = (M["m01"] / M["m00"])
+            centroids.append((cX, cY))
+
+    # Return the image copy and centroids
+    return image_copy, centroids
+
+
+# Function to predict mask for a patch
+def predict_patch(patch, model, input_size):
+    patch = resize(patch, input_size)
+    patch = np.expand_dims(patch, axis=0)  # Add batch dimension
+    predicted_patch_mask = model.predict(patch)
+    predicted_patch_mask = (predicted_patch_mask > 0.5).astype(np.uint8)  # Binarize the output
+    predicted_patch_mask = np.squeeze(predicted_patch_mask)  # Remove batch dimension
+    return predicted_patch_mask
+
+
+
+
+############### Those functions are the related to simple and complex strucutre:
+
+################## join the following party in the form of the data #################
+
+
+def count_junctions(component_mask):
+    skeleton = skeletonize(component_mask).astype(np.uint8)
+    y_coords, x_coords = np.where(skeleton)
+    coords_set = set(zip(y_coords, x_coords))
+    junction_count = 0
+    for y, x in zip(y_coords, x_coords):
+        count = 0
+        for dy in [-1, 0, 1]:
+            for dx in [-1, 0, 1]:
+                if dy == 0 and dx == 0:
+                    continue
+                if (y + dy, x + dx) in coords_set:
+                    count += 1
+        if count >=4:
+            junction_count += 1
+    return junction_count
+
+
+
+
+def get_connected_components(segmented_image):
+    # Apply morphological opening to remove small connections
+    kernel = np.ones((3, 3), np.uint8)
+    opened_image = cv2.morphologyEx(segmented_image, cv2.MORPH_OPEN, kernel)
+    
+    labels = label(opened_image)
+    components = []
+    for component in np.unique(labels):
+        if component == 0:
+            continue
+        coords = np.argwhere(labels == component)
+        if len(coords) == 0:
+            continue
+        y_min, y_max = coords[:, 0].min(), coords[:, 0].max()
+        x_min, x_max = coords[:, 1].min(), coords[:, 1].max()
+        sub_labels = labels[y_min:y_max+1, x_min:x_max+1]
+        component_mask = (sub_labels == component).astype(np.uint8)
+        components.append((component_mask, x_min, y_min, x_max, y_max))
+    return components
+
+def has_holes(mask):
+    contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    for i in range(len(contours)):
+        if hierarchy[0][i][3] != -1:  # Check if the contour has a parent (indicating a hole)
+            return True
+    return False
+
+def process_large_image(binary_image):
+    components = get_connected_components(binary_image)
+    
+    straight_lines = []
+    grid = []
+    for component in components:
+        mask, x_min, y_min, x_max, y_max = component
+        
+        # Calculate properties of the component
+        num_junc = count_junctions(mask)
+        area = np.sum(mask)
+        length = max(x_max - x_min, y_max - y_min)
+        width = min(x_max - x_min, y_max - y_min)
+        aspect_ratio = length / width
+        extent = area / ((x_max - x_min) * (y_max - y_min))
+        
+        # Check for holes in the component
+        if has_holes(mask):
+            grid.append(component)
+        # Classify based on width, number of junctions, and other properties
+        elif num_junc <=12:
+            straight_lines.append(component)
+        else:
+            grid.append(component)
+            
+    return straight_lines, grid
+
+
+def remove_edge_effect(image):
+    """
+    Remove edge effect in segmentation by setting the edges of the image to zero.
+    
+    Parameters:
+    image (numpy.ndarray): Input binary image.
+    
+    Returns:
+    numpy.ndarray: Image with edge effect removed.
+    """
+    # Create a mask with edges set to zero
+    mask = np.ones_like(image)
+    mask[0, :] = 0
+    mask[-1, :] = 0
+    mask[:, 0] = 0
+    mask[:, -1] = 0
+    
+    # Apply the mask to the image
+    image = image * mask
+    
+    return image
+
+
+
+### check for break happen or not in processing pipelines #######
+def break_connected_components(segmented_image):
+    # Apply morphological opening to remove small connections
+    kernel = np.ones((5, 5), np.uint8)
+    opened_image = cv2.morphologyEx(segmented_image, cv2.MORPH_OPEN, kernel)
+    return opened_image
+
+
+import numpy as np
+import cv2
+
+def detect_vias_with_mask(M_sample, threshold_percentage, contour_size):
+    """
+    Detect vias in the given sample metal layer and return the image with vias and their surrounding area filled with white pixels.
+    
+    Parameters:
+    M_sample (numpy.ndarray): The input sample image.
+    threshold_percentage (float): The percentage threshold to determine high-intensity pixels.
+    contour_size (int): The maximum size of the contours to be detected.
+    
+    Returns:
+    numpy.ndarray: The image with vias and their surrounding area filled with white pixels.
+    numpy.ndarray: The mask with vias filled with white pixels.
+    list: A list of centroids of the detected vias.
+    """
+    max_pixel = M_sample.max(axis=(0, 1))
+
+    for i in range(0, 100, 10):
+        ret, thresh = cv2.threshold(M_sample, max_pixel - i, 255, cv2.THRESH_BINARY)
+        high_intensity_pixel_gt_one_percent = thresh.sum() / (M_sample.shape[0] * M_sample.shape[1] * 255) * 100
+        if high_intensity_pixel_gt_one_percent > threshold_percentage:
+            break
+
+    kernel = np.ones((3,3), np.uint8)
+    dilate = cv2.dilate(thresh, kernel, 1)
+
+    contours, hierarchy = cv2.findContours(image=dilate, mode=cv2.RETR_TREE, method=cv2.CHAIN_APPROX_NONE)
+    # Filter contours based on length
+    contours = [cnt for cnt in contours if cv2.arcLength(cnt, True) <= contour_size]
+
+    image_copy = M_sample.copy()
+    mask = np.zeros_like(M_sample)
+    cv2.drawContours(image=image_copy, contours=contours, contourIdx=-1, color=(0, 255, 0), thickness=1, lineType=cv2.LINE_AA)
+    cv2.drawContours(image=mask, contours=contours, contourIdx=-1, color=(255, 255, 255), thickness=cv2.FILLED)
+
+    # Calculate centroids
+    centroids = []
+    for cnt in contours:
+        M = cv2.moments(cnt)
+        if M["m00"] != 0:
+            cX = (M["m10"] / M["m00"])
+            cY = (M["m01"] / M["m00"])
+            centroids.append((cX, cY))
+
+    # Return the image copy, mask, and centroids
+    return image_copy, mask, centroids
+
+
+
+########### This is to seperate junction vs lines#######################
+
+#### Use all 32 cores ################
+
+import cv2
+import numpy as np
+import dask.array as da
+from skimage.morphology import skeletonize
+from dask import delayed, compute
+from dask.distributed import Client
+
+client = Client(n_workers=10)
+
+def count_junctions(skeleton):
+    """Count junctions using convolution on skeletonized image."""
+    kernel = np.array([[1,1,1], [1,0,1], [1,1,1]], dtype=np.uint8)
+    neighbor_count = cv2.filter2D(skeleton, cv2.CV_8U, kernel)
+    return np.count_nonzero(neighbor_count >= 4)
+
+def calculate_features(component_mask):
+    """Vectorized feature extraction for a component."""
+    skeleton = skeletonize(component_mask // 255).astype(np.uint8)
+    if np.sum(skeleton) == 0:
+        return 0, 0, 0, 0
+    
+    # Junction and endpoint detection
+    kernel = np.array([[1,1,1], [1,0,1], [1,1,1]], dtype=np.uint8)
+    neighbor_count = cv2.filter2D(skeleton, cv2.CV_8U, kernel)
+    junctions = np.count_nonzero(neighbor_count == 4)
+    endpoints = np.count_nonzero(neighbor_count == 1)
+    
+    # Geometric features
+    area = np.sum(component_mask) // 255
+    y, x = np.where(component_mask)
+    length = max(y.max()-y.min(), x.max()-x.min()) if len(y) > 0 else 0
+    width = min(y.max()-y.min(), x.max()-x.min()) if len(y) > 0 else 0
+    aspect_ratio = length / width if width > 0 else 0
+    
+    return junctions, endpoints, aspect_ratio, area
+
+def get_connected_components(binary_image):
+    """Optimized component extraction using OpenCV."""
+    kernel = np.ones((3,3), np.uint8)
+    opened = cv2.morphologyEx(binary_image, cv2.MORPH_OPEN, kernel)
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(opened, connectivity=8)
+    
+    components = []
+    for i in range(1, len(stats)):
+        x, y, w, h = stats[i][:4]
+        mask = (labels[y:y+h, x:x+w] == i).astype(np.uint8) * 255
+        components.append((mask, (x, y, x+w, y+h)))
+    return components
+
+def classify_component(args):
+    """Parallel classification worker."""
+    mask, bbox = args
+    junctions, endpoints, aspect_ratio, area = calculate_features(mask)
+    
+    # Check for holes (complex structures) using hierarchy
+    contours, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    has_holes = any(hierarchy[0][i][3] != -1 for i in range(len(contours)))
+
+    # Classification rules (adjust thresholds as needed)
+    if ( aspect_ratio > 4 and junctions <= 25 and not has_holes):
+        return ('simple', mask, bbox)
+    
+    return ('complex', mask, bbox)
+
+def process_large_image_all_core(binary_image):
+    """Main processing with parallel execution using Dask."""
+    components = get_connected_components((binary_image * 255).astype(np.uint8))
+    
+    # Parallel processing using Dask
+    tasks = [delayed(classify_component)(component) for component in components]
+    results = compute(*tasks, scheduler='distributed')
+    
+    # Separate results
+    simple = [r[1:] for r in results if r[0] == 'simple']
+    complex_grid = [r[1:] for r in results if r[0] == 'complex']
+    
+    return simple, complex_grid
+
+
+
+model_M0 = load_model('/home/spaudel/IC_images/Trained_model/unet_M0_100_iter_4_20.keras')
+model_M1_M4 = load_model('/home/spaudel/IC_images/Trained_model//unet_M1_M4_50_iter_6_4.keras')
+
+
+# Increase the pixel limit
+Image.MAX_IMAGE_PIXELS = None
+
+# Function to predict mask for a patch
+def predict_patch(patch, model, input_size):
+    patch = resize(patch, input_size)
+    patch = np.expand_dims(patch, axis=0)  # Add batch dimension
+    predicted_patch_mask = model.predict(patch)
+    predicted_patch_mask = (predicted_patch_mask > 0.5).astype(np.uint8)  # Binarize the output
+    predicted_patch_mask = np.squeeze(predicted_patch_mask)  # Remove batch dimension
+    return predicted_patch_mask
+
+# Function to create a weight matrix for blending
+def create_weight_matrix(patch_height, patch_width):
+    y = np.linspace(-1, 1, patch_height)
+    x = np.linspace(-1, 1, patch_width)
+    xv, yv = np.meshgrid(x, y)
+    weight_matrix = np.exp(-(xv**2 + yv**2))
+    return weight_matrix
+
+# Function to process an image and generate the mask
+def process_image(image_path, model, patch_height, patch_width, stride):
+    large_image = load_img(image_path)
+    large_image = img_to_array(large_image) / 255.0
+    original_height, original_width = large_image.shape[:2]  # Save the original size
+
+    large_mask = np.zeros((original_height, original_width))
+    weight_matrix = np.zeros((original_height, original_width))
+    weight_matrix_patch = create_weight_matrix(patch_height, patch_width)
+
+    # Slide the window over the large image
+    for y in range(0, original_height - patch_height + 1, stride):
+        for x in range(0, original_width - patch_width + 1, stride):
+            patch = large_image[y:y + patch_height, x:x + patch_width]
+            predicted_patch_mask = predict_patch(patch, model, (patch_height, patch_width))
+            
+            # Update the mask and weight matrix using the weight matrix patch
+            large_mask[y:y + patch_height, x:x + patch_width] += predicted_patch_mask * weight_matrix_patch
+            weight_matrix[y:y + patch_height, x:x + patch_width] += weight_matrix_patch
+
+    # Normalize the mask by the weight matrix to blend the overlapping regions
+    epsilon = 1e-8  # Small value to avoid division by zero
+    large_mask = large_mask / (weight_matrix + epsilon)
+
+    return large_image, large_mask
+
+
+# Define the model and parameters
+model = model_M1_M4
+patch_height, patch_width = 256, 256
+stride = 128
+large_image_1, large_mask_1 = process_image(image_path_M1, model, patch_height, patch_width, stride)
+
+plt.figure(figsize=(10, 5))
+plt.subplot(1, 2, 1)
+plt.title('Test Image 3')
+plt.imshow(large_image_1)
+
+plt.subplot(1, 2, 2)
+plt.title('Predicted Mask 3')
+plt.imshow(large_mask_1, cmap='gray')
+
+
+
+# Save the image
+path_im = '/home/spaudel/IC_images/Test_Image_150_Hynix/2_M1_bin_trained.png'
+
+# Convert binary mask to uint8 format
+uint8_mask_1 = (large_mask_1 * 255).astype(np.uint8)
+
+
+cv2.imwrite(path_im, uint8_mask_1)
+
+
+
+path = '/home/spaudel/IC_images/Test_Image_150_Hynix/2_M1_bin.png' 
+cv2.imwrite(path, bin_img_M1)
+
+
+start_time = time.time()
+#Process components
+simple_M1, complex_M1 = process_large_image_all_core(bin_img_M1)
+# Create visualizations
+#straight_img = create_composite_image(straight_lines,non_dummy_components_M1)
+#grid_img = create_composite_image(grid, non_dummy_components_M1)
+
+end_time = time.time()
+total_time = end_time - start_time
+print(f"Total time to run the code: {total_time:.2f} seconds")
+
+
+
+import cv2
+import numpy as np
+
+def create_composite_image(components, image_shape):
+    """Create a composite image from list of components."""
+    composite_image = np.zeros(image_shape, dtype=np.uint8)
+    
+    for mask, bbox in components:
+        x1, y1, x2, y2 = bbox
+        composite_image[y1:y2, x1:x2] = mask
+    
+    return composite_image
+
+# Assuming non_dummy_M0 is the binary image used for processing
+# and simple_M0, complex_M0 are the results from process_large_image function
+
+# Create composite images for simple and complex components
+simple_image_M1 = create_composite_image(simple_M1, bin_img_M1.shape)
+complex_image_M1 = create_composite_image(complex_M1, bin_img_M1.shape)
+
+
+
+# Save the image
+path_im = '/home/spaudel/IC_images/Test_Image_150_Hynix/2_M1_simple.png'
+cv2.imwrite(path_im, simple_image_M1)
+
+
+
+# Save the image
+path_im = '/home/spaudel/IC_images/Test_Image_150_Hynix/M1_complex.png'
+cv2.imwrite(path_im, complex_image_M1)
+
+
+
+import pandas as pd
+import numpy as np
+import time
+from skimage.morphology import skeletonize
+from skimage.measure import label
+from dask import delayed, compute
+
+def process_image_components_incrementally(straight_img_M1, eps_primary_horizontal, eps_secondary_horizontal, eps_primary_vertical, eps_secondary_vertical):
+    vertical_dfs = []
+    horizontal_dfs = []
+
+    start_time = time.time()
+
+    # Label connected components
+    skeletonized_image_M1 = skeletonize(straight_img_M1)
+    labels = label(skeletonized_image_M1)
+    unique_labels = np.unique(labels)
+
+    # Process components incrementally
+    for component_label in unique_labels:
+        if component_label == 0:
+            continue  # Skip background
+
+        vertical_df, horizontal_df = process_component(
+            labels, component_label, eps_primary_horizontal, eps_secondary_horizontal, eps_primary_vertical, eps_secondary_vertical
+        )
+        vertical_dfs.append(vertical_df)
+        horizontal_dfs.append(horizontal_df)
+
+    # Concatenate all dataframes
+    vertical_df_M1 = pd.concat(vertical_dfs, ignore_index=True)
+    horizontal_df_M1 = pd.concat(horizontal_dfs, ignore_index=True)
+
+    end_time = time.time()
+    total_time = end_time - start_time
+    print(f"Total time to run the code: {total_time:.2f} seconds")
+
+    return vertical_df_M1, horizontal_df_M1
+
+def process_component(labels, component_label, eps_primary_horizontal, eps_secondary_horizontal, eps_primary_vertical, eps_secondary_vertical):
+    # Extract the current component mask
+    component_mask = (labels == component_label)
+
+    # Convert mask to uint8 format
+    component_x = (component_mask * 255).astype(np.uint8)
+
+    line_segments = extract_line_segments(component_x)
+    line_dict_M1, coordinates_dict_M1, horizontal_lines_ids, vertical_lines_ids = assign_line_ids(line_segments)
+
+    df_selected_lines_horizontal = create_dataframe(line_dict_M1, horizontal_lines_ids)
+    df_selected_lines_vertical = create_dataframe(line_dict_M1, vertical_lines_ids)
+
+    df_grouped_lines_horizontal = group_lines(df_selected_lines_horizontal.copy(), eps_primary=eps_primary_horizontal, eps_secondary=eps_secondary_horizontal, min_samples=1, primary_axis='y')
+    df_grouped_lines_vertical = group_lines(df_selected_lines_vertical.copy(), eps_primary=eps_primary_vertical, eps_secondary=eps_secondary_vertical, min_samples=1, primary_axis='x')
+
+    new_lines_horizontal = replace_lines_with_group(df_grouped_lines_horizontal, primary_axis='y')
+    new_lines_vertical = replace_lines_with_group(df_grouped_lines_vertical, primary_axis='x')
+
+    processed_vertical = extend_vertical_lines_to_touch_horizontal(new_lines_vertical, new_lines_horizontal, 15)
+    processed_horizontal = extend_horizontal_lines_to_touch_vertical(new_lines_horizontal, processed_vertical, 15)
+
+    processed_vertical_df = pd.DataFrame(processed_vertical, columns=['x1', 'y1', 'x2', 'y2'])
+    processed_horizontal_df = pd.DataFrame(processed_horizontal, columns=['x1', 'y1', 'x2', 'y2'])
+
+    return processed_vertical_df, processed_horizontal_df
+
+
+
+start_time = time.time()
+eps_primary_horizontal = 3
+eps_secondary_horizontal = 5
+eps_primary_vertical = 3
+eps_secondary_vertical = 5
+vertical_df_M0, horizontal_df_M0 = process_image_components_incrementally(simple_image_M1, eps_primary_horizontal, eps_secondary_horizontal, eps_primary_vertical, eps_secondary_vertical)
+end_time = time.time()
+total_time = end_time - start_time
+print(f"Total time to run the code: {total_time:.2f} seconds")
+
+
+vertical_df_M1, horizontal_df_M1 = vertical_df_M0, horizontal_df_M0
+
+# Plot the final image
+final_image_M1 = plot_final_lines(horizontal_df_M1, vertical_df_M1, M1_sample.shape)
+plt.figure()
+plt.imshow(final_image_M1)
+plt.title('Final Image with Processed Lines')
+plt.show()
+
+M1_sample_1 = cv2.cvtColor(M1_sample, cv2.COLOR_GRAY2BGR)
+# Overlay the combined image with the original sample
+overlay_image_1 = cv2.addWeighted(M1_sample_1, 0.5, final_image_M1, 0.5, 0)
+# Display the overlay image
+plt.figure()
+plt.imshow(overlay_image_1)
+plt.title('Netline on M1_sample')
+plt.axis('on')
+plt.show()
+
+
+# Save the image
+path_im_final = '/home/spaudel/IC_images/Test_Image_150_Hynix/M1_final.png'
+cv2.imwrite(path_im_final, final_image_M1)
+
+# Save the image
+path_im_final = '/home/spaudel/IC_images/Test_Image_150_Hynix/M1_overlay.png'
+cv2.imwrite(path_im_final, overlay_image_1 )
+
+
+# Find crossing points using optimized method
+crossing_points_M1 = find_crossing_points_optimized(vertical_df_M1, horizontal_df_M1)
+
+# Split vertical lines
+split_lines_M1 = split_vertical_lines(vertical_df_M1, crossing_points_M1)
+
+# Convert to DataFrame
+split_lines_data_M1 = []
+for line in split_lines_M1:
+    x1, y1 = line['start']
+    x2, y2 = line['end']
+    split_lines_data_M1.append({'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
+
+updated_split_lines_vertical_M1 = pd.DataFrame(split_lines_data_M1)
+
+store_vertical_M1 = updated_split_lines_vertical_M1
+store_horizontal_M1 = horizontal_df_M1
+stored_M1_df = pd.concat([store_horizontal_M1, store_vertical_M1 ], ignore_index=True)
+
+
+mask_path_M2 = '/home/spaudel/IC_images/Test_Image_150_Hynix/M2_bin_trained.png'
+large_mask_trained_M2 = cv2.imread(mask_path_M2, cv2.IMREAD_GRAYSCALE)
+
+_, large_mask_M2 = cv2.threshold(large_mask_trained_M2, 90, 255, cv2.THRESH_BINARY)
+
+
+path = '/home/spaudel/IC_images/Test_Image_150_Hynix/M2_saved.png' 
+cv2.imwrite(path, large_mask_M2)
+
+
+start_time = time.time()
+#Process components
+simple_M2, complex_M2 = process_large_image_all_core(large_mask_M2)
+end_time = time.time()
+total_time = end_time - start_time
+print(f"Total time to run the code: {total_time:.2f} seconds")
+
+
+simple_image_M2 = create_composite_image(simple_M2, large_mask_M2.shape)
+complex_image_M2 = create_composite_image(complex_M2, large_mask_M2.shape)
+
+# Save the image
+path_im = '/home/spaudel/IC_images/Test_Image_150_Hynix/M2_simple.png'
+cv2.imwrite(path_im, simple_image_M2)
+
+
+# Save the image
+path_im = '/home/spaudel/IC_images/Test_Image_150_Hynix/M2_complex.png'
+cv2.imwrite(path_im, complex_image_M2)
+
+
+start_time = time.time()
+eps_primary_horizontal = 3
+eps_secondary_horizontal = 5
+eps_primary_vertical = 3
+eps_secondary_vertical = 5
+vertical_df_M2, horizontal_df_M2 = process_image_components_incrementally(simple_image_M2, eps_primary_horizontal, eps_secondary_horizontal, eps_primary_vertical, eps_secondary_vertical)
+end_time = time.time()
+total_time = end_time - start_time
+print(f"Total time to run the code: {total_time:.2f} seconds")
+
+
+final_image_M2 = plot_final_lines(horizontal_df_M2, vertical_df_M2, M2_sample.shape)
+
+M2_sample_1 = cv2.cvtColor(M2_sample, cv2.COLOR_GRAY2BGR)
+# Overlay the combined image with the original sample
+overlay_image_2 = cv2.addWeighted(M2_sample_1, 0.5, final_image_M2, 0.5, 0)
+# Display the overlay image
+plt.figure()
+plt.imshow(overlay_image_2)
+plt.title('Netline on M1_sample')
+plt.axis('on')
+plt.show()
+
+
+# Save the image
+path_im = '/home/spaudel/IC_images/Test_Image_150_Hynix/M2_final.png'
+cv2.imwrite(path_im, overlay_image_2)
+
+# Find crossing points using optimized method
+crossing_points_M2 = find_crossing_points_optimized(vertical_df_M2, horizontal_df_M2)
+
+# Split vertical lines
+split_lines_M2 = split_vertical_lines(vertical_df_M2, crossing_points_M2)
+
+# Convert to DataFrame
+split_lines_data_M2 = []
+for line in split_lines_M2:
+    x1, y1 = line['start']
+    x2, y2 = line['end']
+    split_lines_data_M2.append({'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
+
+updated_split_lines_vertical_M2 = pd.DataFrame(split_lines_data_M2)
+
+store_vertical_M2 = updated_split_lines_vertical_M2
+store_horizontal_M2 = horizontal_df_M2
+stored_M2_df = pd.concat([store_horizontal_M2, store_vertical_M2 ], ignore_index=True)
+
+
+#################### repeat this upto M4 ##################
+
+
+
+
+################### Now Via detection ##################
+
+
+
+############## Find the vias for all lines 
+
+############################################### Vias positions for M1 #################################################
+threshold_percentage = 1.2
+contour_size = 200
+image_copy_M1, centroids_M1 = detect_vias(M1_sample, threshold_percentage,contour_size)
+
+plt.figure()
+plt.imshow(image_copy_M1)
+plt.show()
+
+ ####################################### vias positions for M2 ######################################################
+threshold_percentage = 0.95
+contour_size = 200
+image_copy_M2, centroids_M2 = detect_vias(M2_sample, threshold_percentage,contour_size)
+plt.figure()
+plt.imshow(image_copy_M2)
+plt.show()
+
+
+##################################################### Vias positions for M3 ###############################################
+threshold_percentage = 1
+contour_size = 80
+image_copy_M3, centroids_M3 = detect_vias(M3_sample, threshold_percentage,contour_size)
+plt.figure()
+plt.imshow(image_copy_M3)
+plt.show()
+
+
+
+intersect_M1_M2 = optimized_find_intersections(stored_M1_df,stored_M2_df)
+intersect_M2_M3 = optimized_find_intersections(stored_M2_df,stored_M3_df)
+
+adjusted_vias_M1, split_for_M2 = optimized_adjust_vias_intersection(centroids_M1, intersect_M1_M2, radius=5)
+adjusted_vias_M2, split_for_M3  = optimized_adjust_vias_intersection(centroids_M2, intersect_M2_M3, radius=5)
+
+
+
+df_updated_horizontal_M2 = split_horizontal_lines_at_via_crossing(store_horizontal_M2, split_for_M2)
+df_updated_vertical_M2 = split_vertical_lines_at_via_crossing(store_vertical_M2, split_for_M2)
+
+df_updated_horizontal_M3 = split_horizontal_lines_at_via_crossing(store_horizontal_M3, split_for_M3)
+df_updated_vertical_M3 = split_vertical_lines_at_via_crossing(store_vertical_M3, split_for_M3)
+
+
+
+def process_combined_lines(df_split_horizontal_at_vias, df_split_vertical_at_vias):
+    """
+    Merge both DataFrames into a single DataFrame, drop lines where x1=x2 and y1=y2, assign unique IDs to each line,
+    convert to the specified format, select the required columns, and display the final DataFrame.
+    
+    Parameters:
+    df_split_horizontal_at_vias (pd.DataFrame): DataFrame containing split horizontal lines.
+    df_split_vertical_at_vias (pd.DataFrame): DataFrame containing split vertical lines.
+    
+    Returns:
+    pd.DataFrame: Processed DataFrame with combined lines.
+    """
+    # Merge both DataFrames into a single DataFrame
+    df_combined_lines_M1_splited = pd.concat([df_split_horizontal_at_vias, df_split_vertical_at_vias], ignore_index=True)
+
+    # Drop lines where x1=x2 and y1=y2
+    df_combined_lines_M1_splited = df_combined_lines_M1_splited[~((df_combined_lines_M1_splited['x1'] == df_combined_lines_M1_splited['x2']) & (df_combined_lines_M1_splited['y1'] == df_combined_lines_M1_splited['y2']))]
+
+    # Assign unique IDs to each line
+    df_combined_lines_M1_splited = df_combined_lines_M1_splited.assign(ID=range(1, len(df_combined_lines_M1_splited) + 1))
+
+    # Convert to the specified format
+    df_combined_lines_M1_splited['start'] = list(zip(df_combined_lines_M1_splited['x1'], df_combined_lines_M1_splited['y1']))
+    df_combined_lines_M1_splited['end'] = list(zip(df_combined_lines_M1_splited['x2'], df_combined_lines_M1_splited['y2']))
+
+    # Select the required columns
+    df_combined_lines_M1_splited = df_combined_lines_M1_splited[['ID', 'start', 'end']]
+    return df_combined_lines_M1_splited
+
+
+
+    #df_final_M0 = process_combined_lines(store_horizontal_M0, store_vertical_M0)
+df_final_M1 = process_combined_lines(store_horizontal_M1, store_vertical_M1)
+df_final_M2 = process_combined_lines(df_updated_horizontal_M2, df_updated_vertical_M2)
+df_final_M3 = process_combined_lines(df_updated_horizontal_M3, df_updated_vertical_M3)
+#df_final_M4 = process_combined_lines(df_updated_horizontal_M4, df_updated_vertical_M4)
+
+
+
+def add_coordinates(df, x_offset, y_offset):
+    """
+    Add x and y coordinates to the start and end points of the lines in the DataFrame.
+    
+    Parameters:
+    df (pd.DataFrame): DataFrame containing lines with columns ['start', 'end'].
+    x_offset (int): Offset to be added to the x coordinate.
+    y_offset (int): Offset to be added to the y coordinate.
+    
+    Returns:
+    pd.DataFrame: DataFrame with updated coordinates.
+    """
+    df['start'] = df['start'].apply(lambda coord: (coord[0] + x_offset, coord[1] + y_offset))
+    df['end'] = df['end'].apply(lambda coord: (coord[0] + x_offset, coord[1] + y_offset))
+    return df
+
+
+
+# Add a source column to each DataFrame
+df_final_M1['source'] = 'M1'
+df_final_M2['source'] = 'M2'
+df_final_M3['source'] = 'M3'
+#df_final_M4['source'] = 'M4'
+
+# Apply the function to each DataFrame
+x_offset = 0
+y_offset = 0
+
+df_final_M1 = add_coordinates(df_final_M1, x_offset, y_offset)
+df_final_M2 = add_coordinates(df_final_M2, x_offset, y_offset)
+df_final_M3 = add_coordinates(df_final_M3, x_offset, y_offset)
+#df_final_M4 = add_coordinates(df_final_M4, x_offset, y_offset)
+
+# Merge the DataFrames
+df_final = pd.concat([df_final_M1, df_final_M2, df_final_M3], ignore_index=True)
+
+# Reset netlineid to ensure continuous counting
+df_final['ID'] = range(1, len(df_final) + 1)
+
+# Display the final DataFrame
+print("Final Combined DataFrame with Source:")
+print(df_final)
+
+
+
+
+####9: Collect the vias locations (till now, I will have vias at intersection points)
+
+# Convert intersections to DataFrame
+df_intersections_M1 = pd.DataFrame( split_for_M2 , columns=['x', 'y'])
+df_intersections_M2 = pd.DataFrame( split_for_M3 , columns=['x', 'y'])
+#df_intersections_M3 = pd.DataFrame( split_for_M4 , columns=['x', 'y'])
+
+df_intersections = pd.concat([df_intersections_M1, df_intersections_M2], ignore_index=True)
+
+# df_intersections['x'] = df_intersections['x'].apply(lambda x: x + x_offset)
+# df_intersections['y'] = df_intersections['y'].apply(lambda y: y + y_offset)
+# df_intersections
+
+import pandas as pd
+
+# Convert intersections to DataFrame and add extra columns
+# df_intersections_M0 = pd.DataFrame(split_for_M1, columns=['x', 'y'])
+# df_intersections_M0['layer'] = 'M0_M1'
+
+df_intersections_M1 = pd.DataFrame(split_for_M2, columns=['x', 'y'])
+df_intersections_M1['layer'] = 'M1_M2'
+
+df_intersections_M2 = pd.DataFrame(split_for_M3, columns=['x', 'y'])
+df_intersections_M2['layer'] = 'M2_M3'
+
+# df_intersections_M3 = pd.DataFrame(split_for_M4, columns=['x', 'y'])
+# df_intersections_M3['layer'] = 'M3_M4'
+
+
+# Concatenate DataFrames
+df_intersections = pd.concat([df_intersections_M1, df_intersections_M2], ignore_index=True)
+
+# Add 800 to both x and y of intersection coordinates
+x_offset = 0
+y_offset = 0
+df_intersections['x'] = df_intersections['x'].apply(lambda x: x + x_offset)
+df_intersections['y'] = df_intersections['y'].apply(lambda y: y + y_offset)
+
+print(df_intersections)
+
+
+
+def convert_to_ic_explorer(img_png, xy_png, top_left, bottom_right):
+    """
+    Convert coordinates from image space to IC Explorer space.
+    
+    Parameters:
+    img_png (numpy.ndarray): The input image.
+    xy_png (tuple): The (x, y) coordinates in the image space.
+    top_left (tuple): The top-left coordinates in the IC Explorer space.
+    bottom_right (tuple): The bottom-right coordinates in the IC Explorer space.
+    
+    Returns:
+    tuple: The (x, y) coordinates in the IC Explorer space.
+    """
+    img_height, img_width = img_png.shape[:2]
+    ic_top_left_x, ic_top_left_y = top_left
+    ic_bottom_right_x, ic_bottom_right_y = bottom_right
+    x_png, y_png = xy_png
+    
+    # Scaling factors
+    scale_x = (ic_bottom_right_x - ic_top_left_x) / img_width
+    scale_y = (ic_bottom_right_y - ic_top_left_y) / img_height
+    
+    # Conversion
+    x_ic = x_png * scale_x + ic_top_left_x
+    y_ic = y_png * scale_y + ic_top_left_y
+    x_ic = round(x_ic)
+    y_ic = round(y_ic)
+    
+    return x_ic, y_ic
+
+def convert_dataframe_coordinates(df, img_png, top_left, bottom_right):
+    """
+    Convert the coordinates in the DataFrame from image space to IC Explorer space.
+    
+    Parameters:
+    df (pd.DataFrame): The input DataFrame with columns ['ID', 'start', 'end', 'source'].
+    img_png (numpy.ndarray): The input image.
+    top_left (tuple): The top-left coordinates in the IC Explorer space.
+    bottom_right (tuple): The bottom-right coordinates in the IC Explorer space.
+    
+    Returns:
+    pd.DataFrame: The DataFrame with converted coordinates.
+    """
+    converted_data = []
+    for index, row in df.iterrows():
+        start_ic = convert_to_ic_explorer(img_png, row['start'], top_left, bottom_right)
+        end_ic = convert_to_ic_explorer(img_png, row['end'], top_left, bottom_right)
+        converted_data.append({'ID': row['ID'], 'start': start_ic, 'end': end_ic, 'source': row['source']})
+    return pd.DataFrame(converted_data)
+
+
+
+
+    ## Jimit Corrections###
+M1_sample = np.zeros((10592, 25280))  # Replace with your actual image
+top_left = (198422, 138102)  # Replace with your actual top-left IC coordinates
+bottom_right = (225780, 149565)
+
+# Convert the coordinates in the DataFrame
+df_final_converted = convert_dataframe_coordinates(df_final, M1_sample, top_left, bottom_right)
+
+# Display the converted DataFrame
+print("Converted Coordinates DataFrame:")
+print(df_final_converted)
+
+
+
+
+
+############ Jimit Corrections ##################
+
+M1_sample = np.zeros((10592, 25280))  # Replace with your actual image
+top_left = (198422, 138102)  # Replace with your actual top-left IC coordinates
+bottom_right = (225780, 149565)
+# Apply the conversion function to each row in the DataFrame
+df_intersections[['x_ic', 'y_ic']] = df_intersections.apply(
+    lambda row: convert_to_ic_explorer(M1_sample, (row['x'], row['y']), top_left, bottom_right), axis=1, result_type='expand'
+)
+
+# Drop the original 'x' and 'y' columns
+df_intersections = df_intersections.drop(columns=['x', 'y'])
+
+# Display the updated DataFrame
+print(df_intersections)
+
+
+
+
+import pandas as pd
+
+# Create DataFrame
+df = pd.DataFrame(df_final_converted)
+
+# Split start and end coordinates into separate columns
+df[['left', 'top']] = pd.DataFrame(df['start'].tolist(), index=df.index)
+df[['right', 'bottom']] = pd.DataFrame(df['end'].tolist(), index=df.index)
+
+# Add layer information
+#df['layer'] = df['source'].apply(lambda x: 3 if x == 'M0' else 4)
+# Add layer information
+df['layer'] = df['source'].apply(lambda x: 3 if x == 'M0' else 4 if x == 'M1' else 5 if x == 'M2' else 6 if x == 'M3' else 7 if x == 'M4'  else 8 if x == 'M5'else None)
+
+# Convert the layer column to integers
+#df['layer'] = df['layer'].astype(int)
+
+#df['layer'] = df['source'].apply(lambda x: int(3) if x == 'M0' else int(4) if x == 'M1' else int(5) if x == 'M3' else int(6) if x == 'M4' else int(7) if x == 'M5' else None)
+
+# Generate unique IDs for netlines
+df['netline_id'] = ['0x{:08x}'.format(0x10000000 + i + 1) for i in range(len(df))]
+
+# Add fixed magic value for netlines
+df['magic'] = '0x00000000'
+
+# Format the netline output
+formatted_netlines = df.apply(
+    lambda row: f"netline id={row['netline_id']} layer={row['layer']} magic={row['magic']} left={row['left']} right={row['right']} top={row['top']} bottom={row['bottom']}",
+    axis=1
+)
+
+
+# Create DataFrame for intersections
+df_ic_intersections = df_intersections
+
+# Generate unique IDs for intersections
+df_ic_intersections['joint_id'] = ['0x{:08X}'.format(0x00000000 + i + 1) for i in range(len(df_ic_intersections))]
+
+# Add fixed connectivities and flags for intersections
+# df_ic_intersections['connectivities'] = '0x00040008'
+
+# Add fixed connectivities and flags for intersections based on layer
+def get_connectivities(layer):
+    if layer == 'M0_M1':
+        return '0x00040000'
+    elif layer == 'M1_M2':
+        return '0x00080000'
+    elif layer == 'M2_M3':
+        return '0x00100000'
+    elif layer == 'M3_M4':
+        return '0x00200000'
+    elif layer == 'M4_M5':
+        return '0x00400000'
+    else:
+        return None
+
+df_ic_intersections['connectivities'] = df_ic_intersections['layer'].apply(get_connectivities)
+df_ic_intersections['flags'] = 0
+
+# Format the joint output
+formatted_joints = df_ic_intersections.apply(
+    lambda row: f"joint id={row['joint_id']} connectivities={row['connectivities']} flags={row['flags']} x={row['x_ic']} y={row['y_ic']}",
+    axis=1
+)
+
+# Combine netlines and joints into one output
+formatted_output = pd.concat([formatted_netlines, formatted_joints], ignore_index=True)
+
+# Save to a text file
+output_path = '/home/spaudel/IC_images/Test_Image_150_Hynix/Remote_Server_M1_M2_M3_M4_150_Hynix_full_image_set_I.txt'
+with open(output_path, 'w') as f:
+    for line in formatted_output:
+        f.write(line + '\n')
+
+print(f"Formatted data saved to {output_path}")
+
+
+
+
