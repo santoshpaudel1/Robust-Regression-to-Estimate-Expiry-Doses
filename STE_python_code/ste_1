@@ -2124,4 +2124,258 @@ print(f"Formatted data saved to {output_path}")
 
 
 
+################################## trained metal lines and vias detection #################
+
+
+
+import cv2
+import numpy as np
+from skimage.measure import label
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+from skimage.morphology import skeletonize
+import matplotlib.pyplot as plt
+import cv2
+from skimage.morphology import skeletonize
+from sklearn.cluster import DBSCAN
+import networkx as nx
+from skimage.util import img_as_bool
+import pandas as pd
+from sklearn.cluster import DBSCAN
+from collections import defaultdict
+import time
+import bisect
+from rtree import index
+from scipy.spatial import cKDTree
+import gc
+import math 
+from skimage.morphology import skeletonize, erosion, dilation, disk
+from skimage.measure import label
+from scipy.sparse import csr_matrix
+from tensorflow.image import resize
+import os
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from PIL import Image
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+from PIL import Image
+from sklearn.model_selection import train_test_split
+
+%matplotlib widget 
+
+# Create a weight matrix for blending
+def create_weight_matrix(patch_height, patch_width):
+    y = np.linspace(-1, 1, patch_height)
+    x = np.linspace(-1, 1, patch_width)
+    xv, yv = np.meshgrid(x, y)
+    weight_matrix = np.exp(-(xv**2 + yv**2))
+    return weight_matrix
+
+# Function to predict mask for a patch using CPU
+def predict_patch(patch, model, input_size, device):
+    patch = cv2.resize(patch, input_size)
+    patch = np.expand_dims(patch, axis=0)  # Add batch dimension
+    patch_tensor = torch.tensor(patch).unsqueeze(1).float().to(device)  # Convert to PyTorch tensor and move to device
+    with torch.no_grad():
+        output = model(patch_tensor)
+        predicted_patch_mask = torch.sigmoid(output).cpu().numpy()
+        predicted_patch_mask = (predicted_patch_mask > 0.5).astype(np.uint8)  # Binarize the output
+        predicted_patch_mask = np.squeeze(predicted_patch_mask)  # Remove batch dimension
+    return predicted_patch_mask
+
+def process_large_image_full_coverage(large_image, model, device, patch_height=256, patch_width=256, stride=128):
+    if large_image is None:
+        raise FileNotFoundError("Image not found")
+    
+    large_image = large_image / 255.0
+    original_height, original_width = large_image.shape[:2]  # Save the original size
+
+    # Initialize an empty mask for the large image
+    large_mask = np.zeros((original_height, original_width))
+    weight_matrix = np.zeros((original_height, original_width))
+    weight_matrix_patch = create_weight_matrix(patch_height, patch_width)
+
+    # Slide the window over the large image and predict masks using CPU
+    for y in range(0, original_height, stride):
+        for x in range(0, original_width, stride):
+            patch = large_image[y:y + patch_height, x:x + patch_width]
+            if patch.shape[0] != patch_height or patch.shape[1] != patch_width:
+                # If the patch is smaller than the desired size (i.e., at the edges), pad it with zeros
+                padded_patch = np.zeros((patch_height, patch_width))
+                padded_patch[:patch.shape[0], :patch.shape[1]] = patch
+                patch = padded_patch
+
+            predicted_patch_mask = predict_patch(patch, model, (patch_height, patch_width), device)
+            
+            # Update the mask and weight matrix using the weight matrix patch
+            mask_update_height = min(patch_height, original_height - y)
+            mask_update_width = min(patch_width, original_width - x)
+            large_mask[y:y + mask_update_height, x:x + mask_update_width] += predicted_patch_mask[:mask_update_height, :mask_update_width] * weight_matrix_patch[:mask_update_height, :mask_update_width]
+            weight_matrix[y:y + mask_update_height, x:x + mask_update_width] += weight_matrix_patch[:mask_update_height, :mask_update_width]
+
+    # Normalize the mask by the weight matrix to blend the overlapping regions
+    epsilon = 1e-8  # Small value to avoid division by zero
+    large_mask_vias = large_mask / (weight_matrix + epsilon)
+    
+    return large_mask_vias
+
+
+image_path_M0 = '/home/spaudel/IC_images/Test_Image_150_Hynix/1_M0.png' 
+image_path_M1 = '/home/spaudel/IC_images/Test_Image_150_Hynix/1_M1.png' 
+image_path_M2 = '/home/spaudel/IC_images/Test_Image_150_Hynix/1_M2.png'
+image_path_M3 = '/home/spaudel/IC_images/Test_Image_150_Hynix/1_M3.png'
+image_path_M4 = '/home/spaudel/IC_images/Test_Image_150_Hynix/1_M4.png'
+
+# Read the images
+M0_sample = cv2.imread(image_path_M0, cv2.IMREAD_GRAYSCALE)
+M1_sample = cv2.imread(image_path_M1, cv2.IMREAD_GRAYSCALE)
+M2_sample = cv2.imread(image_path_M2, cv2.IMREAD_GRAYSCALE)
+M3_sample = cv2.imread(image_path_M3, cv2.IMREAD_GRAYSCALE)
+M4_sample = cv2.imread(image_path_M4, cv2.IMREAD_GRAYSCALE)
+
+
+# convert the image into same shape 
+height, width = M0_sample.shape
+M1_sample = M1_sample[:height, :width]
+M2_sample = M2_sample[:height, :width]
+M3_sample = M3_sample[:height, :width]
+M4_sample = M4_sample[:height, :width]
+
+
+
+# 2. Enhanced Model Architecture with Attention --------------------------------
+class AttentionBlock(nn.Module):
+    """Attention gate for focusing on via features"""
+    def __init__(self, F_g, F_l, F_int):
+        super().__init__()
+        self.W_g = nn.Sequential(
+            nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0),
+            nn.GroupNorm(1, F_int)
+        )
+        
+        self.W_x = nn.Sequential(
+            nn.Conv2d(F_l, F_int, kernel_size=1, stride=1, padding=0),
+            nn.GroupNorm(1, F_int)
+        )
+        
+        self.psi = nn.Sequential(
+            nn.Conv2d(F_int, 1, kernel_size=1, stride=1, padding=0),
+            nn.GroupNorm(1, 1),
+            nn.Sigmoid()
+        )
+        
+        self.relu = nn.ReLU(inplace=True)
+        
+    def forward(self, g, x):
+        g1 = self.W_g(g)
+        x1 = self.W_x(x)
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)
+        return x * psi
+
+class ConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, padding=1),
+            nn.GroupNorm(1, out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, 3, padding=1),
+            nn.GroupNorm(1, out_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+    def forward(self, x):
+        return self.conv(x)
+
+class ViaDetector(nn.Module):
+    def __init__(self, in_channels=1, out_channels=1):
+        super().__init__()
+        # Encoder
+        self.enc1 = ConvBlock(in_channels, 32)
+        self.enc2 = ConvBlock(32, 64)
+        self.enc3 = ConvBlock(64, 128)
+        self.enc4 = ConvBlock(128, 256)
+        self.pool = nn.MaxPool2d(2)
+        
+        # Bottleneck
+        self.bottleneck = ConvBlock(256, 512)
+        
+        # Decoder with attention
+        self.up4 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
+        self.att4 = AttentionBlock(256, 256, 128)
+        self.dec4 = ConvBlock(512, 256)
+        
+        self.up3 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
+        self.att3 = AttentionBlock(128, 128, 64)
+        self.dec3 = ConvBlock(256, 128)
+        
+        self.up2 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
+        self.att2 = AttentionBlock(64, 64, 32)
+        self.dec2 = ConvBlock(128, 64)
+        
+        self.up1 = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
+        self.att1 = AttentionBlock(32, 32, 16)
+        self.dec1 = ConvBlock(64, 32)
+        
+        # Output
+        self.final = nn.Conv2d(32, out_channels, 1)
+        
+    def forward(self, x):
+        # Encoder
+        e1 = self.enc1(x)
+        e2 = self.enc2(self.pool(e1))
+        e3 = self.enc3(self.pool(e2))
+        e4 = self.enc4(self.pool(e3))
+        
+        # Bottleneck
+        b = self.bottleneck(self.pool(e4))
+        
+        # Decoder with attention
+        d4 = self.up4(b)
+        a4 = self.att4(d4, e4)
+        d4 = torch.cat((a4, d4), dim=1)
+        d4 = self.dec4(d4)
+        
+        d3 = self.up3(d4)
+        a3 = self.att3(d3, e3)
+        d3 = torch.cat((a3, d3), dim=1)
+        d3 = self.dec3(d3)
+        
+        d2 = self.up2(d3)
+        a2 = self.att2(d2, e2)
+        d2 = torch.cat((a2, d2), dim=1)
+        d2 = self.dec2(d2)
+        
+        d1 = self.up1(d2)
+        a1 = self.att1(d1, e1)
+        d1 = torch.cat((a1, d1), dim=1)
+        d1 = self.dec1(d1)
+        
+        return self.final(d1)
+
+
+# Load the model
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = ViaDetector(in_channels=1, out_channels=1)
+checkpoint_path = '/home/spaudel/IC_images/Trained_model/best_model_M1_M4_latest.pth'
+checkpoint = torch.load(checkpoint_path, map_location=device)
+model.load_state_dict(checkpoint)
+model.to(device)
+model.eval()
+
+
+large_mask_1 = process_large_image_full_coverage(M1_sample, model, device)
+
+
+# Save the processed image in the specified folder
+output_path = '/home/spaudel/IC_images/Test_Image_150_Hynix/seg_img_M1_prep_full_coverage.png'
+bin_img_M1 = (large_mask_1 * 255).astype(np.uint8)
+_, seg_img_M1 = cv2.threshold(bin_img_M1, 127, 255, cv2.THRESH_BINARY)
+cv2.imwrite(output_path, seg_img_M1)
+        
+
 
