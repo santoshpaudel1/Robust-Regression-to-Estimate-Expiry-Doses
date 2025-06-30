@@ -2812,3 +2812,189 @@ def visualize_results(model, dataloader, num_samples=3):
 # Visualize validation results
 visualize_results(model, val_loader, num_samples=5)           
 
+
+
+########### This is to seperate junction vs lines#######################
+
+#### Use all 32 cores ################
+
+import cv2
+import numpy as np
+import dask.array as da
+from skimage.morphology import skeletonize
+from dask import delayed, compute
+from dask.distributed import Client
+
+client = Client(n_workers=32)
+
+def count_junctions(skeleton):
+    """Count junctions using convolution on skeletonized image."""
+    kernel = np.array([[1,1,1], [1,0,1], [1,1,1]], dtype=np.uint8)
+    neighbor_count = cv2.filter2D(skeleton, cv2.CV_8U, kernel)
+    return np.count_nonzero(neighbor_count >= 4)
+
+def calculate_features(component_mask):
+    """Vectorized feature extraction for a component."""
+    skeleton = skeletonize(component_mask // 255).astype(np.uint8)
+    if np.sum(skeleton) == 0:
+        return 0, 0, 0, 0
+    
+    # Junction and endpoint detection
+    kernel = np.array([[1,1,1], [1,0,1], [1,1,1]], dtype=np.uint8)
+    neighbor_count = cv2.filter2D(skeleton, cv2.CV_8U, kernel)
+    junctions = np.count_nonzero(neighbor_count == 4)
+    endpoints = np.count_nonzero(neighbor_count == 1)
+    
+    # Geometric features
+    area = np.sum(component_mask) // 255
+    y, x = np.where(component_mask)
+    length = max(y.max()-y.min(), x.max()-x.min()) if len(y) > 0 else 0
+    width = min(y.max()-y.min(), x.max()-x.min()) if len(y) > 0 else 0
+    aspect_ratio = length / width if width > 0 else 0
+    
+    return junctions, endpoints, aspect_ratio, area
+
+def get_connected_components(binary_image):
+    """Optimized component extraction using OpenCV."""
+    kernel = np.ones((3,3), np.uint8)
+    opened = cv2.morphologyEx(binary_image, cv2.MORPH_OPEN, kernel)
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(opened, connectivity=8)
+    
+    components = []
+    for i in range(1, len(stats)):
+        x, y, w, h = stats[i][:4]
+        mask = (labels[y:y+h, x:x+w] == i).astype(np.uint8) * 255
+        components.append((mask, (x, y, x+w, y+h)))
+    return components
+
+def classify_component(args):
+    """Parallel classification worker."""
+    mask, bbox = args
+    junctions, endpoints, aspect_ratio, area = calculate_features(mask)
+    
+    # Check for holes (complex structures) using hierarchy
+    contours, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    has_holes = any(hierarchy[0][i][3] != -1 for i in range(len(contours)))
+
+    # Classification rules (adjust thresholds as needed)
+    if ( aspect_ratio > 4 and not has_holes):
+        return ('simple', mask, bbox)
+    
+    return ('complex', mask, bbox)
+
+def process_large_image_all_core_1(binary_image):
+    """Main processing with parallel execution using Dask."""
+    components = get_connected_components((binary_image * 255).astype(np.uint8))
+    
+    # Parallel processing using Dask
+    tasks = [delayed(classify_component)(component) for component in components]
+    results = compute(*tasks, scheduler='distributed')
+    
+    # Separate results
+    simple = [r[1:] for r in results if r[0] == 'simple']
+    complex_grid = [r[1:] for r in results if r[0] == 'complex']
+    
+    return simple, complex_grid
+
+####################### check ############################################
+
+########### This is to seperate junction vs lines#######################
+
+#### Use all 32 cores ################
+
+import cv2
+import numpy as np
+import dask.array as da
+from skimage.morphology import skeletonize
+from dask import delayed, compute
+from dask.distributed import Client
+
+client = Client(n_workers=32)
+
+def count_junctions(skeleton):
+    """Count junctions using convolution on skeletonized image."""
+    kernel = np.array([[1,1,1], [1,0,1], [1,1,1]], dtype=np.uint8)
+    neighbor_count = cv2.filter2D(skeleton, cv2.CV_8U, kernel)
+    return np.count_nonzero(neighbor_count >= 4)
+
+def calculate_features(component_mask):
+    """Vectorized feature extraction for a component."""
+    skeleton = skeletonize(component_mask // 255).astype(np.uint8)
+    if np.sum(skeleton) == 0:
+        return 0, 0, 0, 0
+    
+    # Junction and endpoint detection
+    kernel = np.array([[1,1,1], [1,0,1], [1,1,1]], dtype=np.uint8)
+    neighbor_count = cv2.filter2D(skeleton, cv2.CV_8U, kernel)
+    junctions = np.count_nonzero(neighbor_count == 4)
+    endpoints = np.count_nonzero(neighbor_count == 1)
+    
+    # Geometric features
+    area = np.sum(component_mask) // 255
+    y, x = np.where(component_mask)
+    length = max(y.max()-y.min(), x.max()-x.min()) if len(y) > 0 else 0
+    width = min(y.max()-y.min(), x.max()-x.min()) if len(y) > 0 else 0
+    aspect_ratio = length / width if width > 0 else 0
+    
+    return junctions, endpoints, aspect_ratio, area
+
+def get_connected_components(binary_image):
+    """Optimized component extraction using OpenCV."""
+    kernel = np.ones((3,3), np.uint8)
+    opened = cv2.morphologyEx(binary_image, cv2.MORPH_OPEN, kernel)
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(opened, connectivity=8)
+    
+    components = []
+    for i in range(1, len(stats)):
+        x, y, w, h = stats[i][:4]
+        mask = (labels[y:y+h, x:x+w] == i).astype(np.uint8) * 255
+        components.append((mask, (x, y, x+w, y+h)))
+    return components
+
+def classify_component(args):
+    """Parallel classification worker."""
+    mask, bbox = args
+    junctions, endpoints, aspect_ratio, area = calculate_features(mask)
+    
+    # Check for holes (complex structures) using hierarchy
+    contours, hierarchy = cv2.findContours(mask.copy(), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    has_holes = any(hierarchy[0][i][3] != -1 for i in range(len(contours)))
+
+    # Classification rules (adjust thresholds as needed)
+    if ( aspect_ratio > 4 and not has_holes):
+        return ('simple', mask, bbox)
+    
+    return ('complex', mask, bbox)
+
+def process_large_image_all_core_1(binary_image):
+    """Main processing with parallel execution using Dask."""
+    components = get_connected_components((binary_image * 255).astype(np.uint8))
+    
+    # Parallel processing using Dask
+    tasks = [delayed(classify_component)(component) for component in components]
+    results = compute(*tasks, scheduler='distributed')
+    
+    # Separate results
+    simple = [r[1:] for r in results if r[0] == 'simple']
+    complex_grid = [r[1:] for r in results if r[0] == 'complex']
+    
+    return simple, complex_grid
+
+
+simple_M3, complex_M3 = process_large_image_all_core_1(seg_img_M3)
+
+
+def create_composite_image(components, image_shape):
+    """Create a composite image from list of components."""
+    composite_image = np.zeros(image_shape, dtype=np.uint8)
+    
+    for mask, bbox in components:
+        x1, y1, x2, y2 = bbox
+        composite_image[y1:y2, x1:x2] = mask
+    
+    return composite_image
+
+simple_image_M3 = create_composite_image(simple_M3, seg_img_M3.shape)
+complex_image_M3 = create_composite_image(complex_M3, seg_img_M3.shape)
+
+
