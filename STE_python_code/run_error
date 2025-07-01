@@ -1,0 +1,146 @@
+(deg_sp) [spaudel@boldramsoft03 Metallization]$ which python
+/home/dramsoft/miniconda3/envs/deg_sp/bin/python
+(deg_sp) [spaudel@boldramsoft03 Metallization]$ python run.py infer --config configs/paths.yaml
+Traceback (most recent call last):
+  File "/home/spaudel/SEM_IC_images/Metallization/run.py", line 3, in <module>
+    from src.inference import main as inference_main
+ImportError: cannot import name 'main' from 'src.inference' (/home/spaudel/SEM_IC_images/Metallization/src/inference/__init__.py)
+(deg_sp) [spaudel@boldramsoft03 Metallization]$
+
+
+
+#!/usr/bin/env python3
+import argparse
+from src.inference import main as inference_main
+from src.train import main as train_main
+
+if __name__ == "__main__":
+    print("[INIT] Metallization Starting...")
+    parser = argparse.ArgumentParser(description='ICNetExtractor - Metal Line and Via Detection')
+    parser.add_argument('mode', choices=['train', 'infer'], help='Execution mode: train or infer')
+    parser.add_argument('--config', default='configs/paths.yaml', help='Path to configuration file')
+    args = parser.parse_args()
+
+    if args.mode == 'train':
+        print("[MODE] Training mode selected.")
+        train_main(args.config)
+    else:
+        print("[MODE] Inference mode selected.")
+        inference_main(args.config)
+
+if __name__ == "__main__":
+    main()
+
+
+import yaml
+import cv2
+import os
+import time
+import numpy as np
+import pandas as pd
+from src.inference.image_loader import load_metal_layers
+from src.inference.via_detector import detect_vias, optimized_adjust_vias_intersection
+from src.inference.netlink_extractor import (
+    find_crossing_points_optimized,
+    split_vertical_lines,
+    split_horizontal_lines_at_via_crossing,
+    split_vertical_lines_at_via_crossing,
+    process_combined_lines,
+)
+from src.inference.metal_layer_processor import process_single_metal_layer
+from src.utils.geometry import convert_dataframe_coordinates, convert_to_ic_explorer
+from src.utils.visualization import plot_final_lines
+import matplotlib.pyplot as plt
+
+def main(config_path):
+    print("[INFO] Starting ICNetExtractor inference pipeline")
+
+    with open(config_path) as f:
+        config_paths = yaml.safe_load(f)
+    with open("configs/inference.yaml") as f:
+        config = yaml.safe_load(f)
+
+    print("[INFO] Loading metal layer images...")
+    metal_layers = load_metal_layers(config_paths['metal_images'])
+
+    stored_layers = {}
+    stored_vias = {}
+    split_for_next = {}
+    df_finals = []
+
+    metal_names = list(metal_layers.keys())
+
+    for i, layer in enumerate(metal_names):
+        print(f"[INFO] Processing {layer}...")
+        image = metal_layers[layer]
+
+        print("[INFO]  > Segmenting and classifying components...")
+        vertical_df, horizontal_df, simple_img, complex_img = process_single_metal_layer(
+            image, config['grouping']['eps_primary'], config['grouping']['eps_secondary']
+        )
+
+        print("[INFO]  > Detecting vias...")
+        vias_image, centroids = detect_vias(
+            image,
+            config['via_detection']['threshold_percentage'],
+            config['via_detection']['contour_size']
+        )
+        stored_vias[layer] = centroids
+
+        if i > 0:
+            prev_layer = metal_names[i - 1]
+            print(f"[INFO]  > Computing intersections between {prev_layer} and {layer}...")
+            intersections = find_crossing_points_optimized(
+                stored_layers[prev_layer]['vertical'], vertical_df
+            )
+            adjusted_vias, split_for = optimized_adjust_vias_intersection(
+                stored_vias[prev_layer], intersections, radius=5
+            )
+            split_for_next[layer] = split_for
+
+            print(f"[INFO]  > Splitting vertical and horizontal lines at vias for {layer}...")
+            vertical_df = split_vertical_lines_at_via_crossing(vertical_df, split_for)
+            horizontal_df = split_horizontal_lines_at_via_crossing(horizontal_df, split_for)
+
+        stored_layers[layer] = {
+            'vertical': vertical_df,
+            'horizontal': horizontal_df,
+        }
+
+        print(f"[INFO]  > Saving visualization for {layer}...")
+        vis = plot_final_lines(horizontal_df, vertical_df, image.shape)
+        vis_path = os.path.join(config_paths['output_visualizations'], f"{layer}_netlines.png")
+        cv2.imwrite(vis_path, vis)
+
+        print(f"[INFO]  > Formatting lines for CSF export for {layer}...")
+        combined_df = process_combined_lines(horizontal_df, vertical_df)
+        combined_df['source'] = layer
+        df_finals.append(combined_df)
+
+    print("[INFO] Concatenating and converting coordinates to IC Explorer format...")
+    df_final = pd.concat(df_finals, ignore_index=True)
+    df_final['ID'] = range(1, len(df_final) + 1)
+    df_final = convert_dataframe_coordinates(
+        df_final,
+        np.zeros_like(metal_layers['M0']),
+        config_paths['top_left'],
+        config_paths['bottom_right']
+    )
+
+    print("[INFO] Saving CSF file...")
+    output_file = config_paths['output_file']
+    with open(output_file, 'w') as f:
+        for i, row in df_final.iterrows():
+            x1, y1 = row['start']
+            x2, y2 = row['end']
+            layer_num = 3 + metal_names.index(row['source'])
+            netline_id = f"0x{0x10000000 + i + 1:08x}"
+            line = f"netline id={netline_id} layer={layer_num} magic=0x00000000 left={x1} right={x2} top={y1} bottom={y2}"
+            f.write(line + '\n')
+
+    print(f"[INFO] Inference complete. CSF saved to {output_file}")
+
+
+if __name__ == "__main__":
+    main()
+
