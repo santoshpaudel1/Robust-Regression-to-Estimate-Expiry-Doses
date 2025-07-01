@@ -144,3 +144,21 @@ def main(config_path):
 if __name__ == "__main__":
     main()
 
+#!/usr/bin/env python3
+import argparse
+from src.inference.inference import main as inference_main  # ✅ updated
+from src.train import main as train_main
+
+if __name__ == "__main__":
+    print("[INIT] Metallization Starting...")
+    parser = argparse.ArgumentParser(description='ICNetExtractor - Metal Line and Via Detection')
+    parser.add_argument('mode', choices=['train', 'infer'], help='Execution mode: train or infer')
+    parser.add_argument('--config', default='configs/paths.yaml', help='Path to configuration file')
+    args = parser.parse_args()
+
+    if args.mode == 'train':
+        print("[MODE] Training mode selected.")
+        train_main(args.config)
+    else:
+        print("[MODE] Inference mode selected.")
+        inference_main(args.config)
