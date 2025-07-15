@@ -347,3 +347,78 @@ print("Final Combined DataFrame with Source:")
 print(df_final)
 
 
+############## pipeline ###############
+
+
+# Replace the inner loop logic in inference.py with the following:
+
+stored_lines = {}
+stored_centroids = {}
+df_finals = []
+
+for i, layer in enumerate(metal_names):
+    print(f"[INFO] Processing {layer}...")
+    image = metal_layers[layer]
+
+    print("[INFO]  > Segmenting and classifying components...")
+    vertical_df, horizontal_df, simple_img, complex_img = process_single_metal_layer(
+        image, config['grouping']['eps_primary'], config['grouping']['eps_secondary']
+    )
+
+    print("[INFO]  > Detecting vias...")
+    vias_img, centroids = detect_vias(
+        image,
+        config['via_detection']['threshold_percentage'],
+        config['via_detection']['contour_size']
+    )
+
+    print("[INFO]  > Splitting vertical lines at their own intersections...")
+    crossings = find_crossing_points_optimized(vertical_df, horizontal_df)
+    split_vlines = split_vertical_lines(vertical_df, crossings)
+    split_vlines_df = pd.DataFrame([{
+        'x1': l['start'][0], 'y1': l['start'][1], 'x2': l['end'][0], 'y2': l['end'][1]
+    } for l in split_vlines])
+
+    stored_lines[layer] = {
+        'horizontal': horizontal_df,
+        'vertical': split_vlines_df
+    }
+    stored_centroids[layer] = centroids
+
+# After loop: compute inter-layer intersections, adjust vias, and split lines
+
+print("[INFO] Adjusting vias and splitting lines based on layer intersections...")
+all_final_dfs = []
+
+for i in range(len(metal_names) - 1):
+    layer_curr = metal_names[i]
+    layer_next = metal_names[i + 1]
+
+    df_curr = pd.concat([stored_lines[layer_curr]['horizontal'], stored_lines[layer_curr]['vertical']], ignore_index=True)
+    df_next = pd.concat([stored_lines[layer_next]['horizontal'], stored_lines[layer_next]['vertical']], ignore_index=True)
+
+    intersections = optimized_find_intersections(df_curr, df_next)
+    adjusted_vias, split_points = optimized_adjust_vias_intersection(stored_centroids[layer_curr], intersections, radius=5)
+
+    print(f"[INFO]  > Splitting {layer_next} lines at adjusted vias...")
+    horiz = split_horizontal_lines_at_via_crossing(stored_lines[layer_next]['horizontal'], split_points)
+    vert = split_vertical_lines_at_via_crossing(stored_lines[layer_next]['vertical'], split_points)
+    stored_lines[layer_next]['horizontal'] = horiz
+    stored_lines[layer_next]['vertical'] = vert
+
+# Convert to final format
+for layer in metal_names:
+    df_combined = process_combined_lines(
+        stored_lines[layer]['horizontal'],
+        stored_lines[layer]['vertical']
+    )
+    df_combined['source'] = layer
+    all_final_dfs.append(df_combined)
+
+# Merge and finalize
+df_final = pd.concat(all_final_dfs, ignore_index=True)
+df_final['ID'] = range(1, len(df_final) + 1)
+df_final = add_coordinates(df_final, 0, 0)
+
+
+
