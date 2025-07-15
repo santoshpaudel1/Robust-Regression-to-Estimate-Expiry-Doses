@@ -1,0 +1,349 @@
+
+def optimized_find_intersections(df_m0, df_m1, tol=1e-9):
+    """
+    Find intersections between M0 and M1 lines with spatial indexing.
+    
+    Parameters:
+    df_m0 (pd.DataFrame): DataFrame containing M0 lines with columns ['x1', 'y1', 'x2', 'y2'].
+    df_m1 (pd.DataFrame): DataFrame containing M1 lines with columns ['x1', 'y1', 'x2', 'y2'].
+    tol (float): Tolerance for floating-point comparisons.
+    
+    Returns:
+    np.ndarray: Array of intersection points.
+    """
+    m0_lines = df_m0[['x1', 'y1', 'x2', 'y2']].to_numpy()
+    m1_lines = df_m1[['x1', 'y1', 'x2', 'y2']].to_numpy()
+
+    # Build R-tree index for M1 lines
+    idx = index.Index()
+    for i, (x1, y1, x2, y2) in enumerate(m1_lines):
+        idx.insert(i, (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)))
+
+    intersections = []
+    for x1, y1, x2, y2 in m0_lines:
+        # Query candidates
+        bbox = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+        candidates = list(idx.intersection(bbox))
+        if not candidates:
+            continue
+
+        # Get candidate lines
+        candidates = m1_lines[candidates]
+        x3 = candidates[:, 0]
+        y3 = candidates[:, 1]
+        x4 = candidates[:, 2]
+        y4 = candidates[:, 3]
+
+        # Vectorized calculations
+        dx1 = x2 - x1
+        dy1 = y2 - y1
+        dx2 = x4 - x3
+        dy2 = y4 - y3
+
+        denom = dx1 * dy2 - dy1 * dx2
+        mask = np.abs(denom) > tol
+        valid_denom = denom[mask]
+
+        # Critical fix: Use -denom in denominator
+        with np.errstate(divide='ignore', invalid='ignore'):
+            t_numerator = (x1 - x3[mask]) * dy2[mask] - (y1 - y3[mask]) * dx2[mask]
+            t = t_numerator / -valid_denom  # Fix applied here
+
+            u_numerator = (x1 - x3[mask]) * dy1 - (y1 - y3[mask]) * dx1
+            u = u_numerator / -valid_denom  # Fix applied here
+
+        # Validate parameters
+        valid = (
+            (t >= -tol) & (t <= 1 + tol) &
+            (u >= -tol) & (u <= 1 + tol)
+        )
+        px = x1 + t[valid] * dx1
+        py = y1 + t[valid] * dy1
+
+        # Store unique points
+        unique_points = np.unique(np.column_stack((px, py)), axis=0)
+        intersections.extend(unique_points)
+
+    return np.array(intersections) if intersections else np.empty((0, 2))
+
+
+
+def optimized_adjust_vias_intersection(vias, intersections, radius=4):
+    """
+    Adjust via positions using KDTree nearest neighbor search and capture adjusted centroids and intersections to split.
+    
+    Parameters:
+    vias (numpy.ndarray): Array of via positions.
+    intersections (numpy.ndarray): Array of intersection positions.
+    radius (int): The radius within which to search for nearest intersections.
+    
+    Returns:
+    numpy.ndarray: Adjusted via positions.
+    list: List of adjusted centroids.
+    list: List of intersections to split.
+    """
+    if intersections.size == 0:
+        return vias, [], []
+   
+    tree = cKDTree(intersections)
+    distances, indices = tree.query(vias, k=1, distance_upper_bound=radius)
+    
+    # Handle out-of-bound indices gracefully by replacing them with original via positions
+    adjusted_indices = np.where(indices < len(intersections), indices, -1)
+    adjusted_vias = np.where(distances[:, None] <= radius,
+                             np.where(adjusted_indices[:, None] != -1,
+                                      intersections[adjusted_indices],
+                                      vias),
+                             vias)
+    
+    # Capture adjusted centroids and intersections to split
+    adjusted_centroids_1 = []
+    intersection_to_split = []
+    
+    for i, (cX, cY) in enumerate(vias):
+        if distances[i] <= radius and adjusted_indices[i] != -1:
+            ix, iy = intersections[adjusted_indices[i]]
+            adjusted_centroids_1.append((ix, iy))
+            intersection_to_split.append((ix, iy))
+        else:
+            adjusted_centroids_1.append((cX, cY))
+    
+    return adjusted_centroids_1, intersection_to_split
+
+
+
+def split_horizontal_lines_at_via_crossing(horizontal_lines, crossing_points):
+    """
+    Split horizontal lines at via crossing points.
+    
+    Parameters:
+    horizontal_lines (pd.DataFrame): DataFrame containing horizontal lines with columns ['x1', 'y1', 'x2', 'y2'].
+    crossing_points (list): List of crossing points as tuples (x, y).
+    
+    Returns:
+    pd.DataFrame: DataFrame containing new horizontal lines with columns ['x1', 'y1', 'x2', 'y2'].
+    """
+    new_horizontal_lines = []
+    for h_idx, h_line in horizontal_lines.iterrows():
+        h_start = (h_line['x1'], h_line['y1'])
+        h_end = (h_line['x2'], h_line['y2'])
+        current_start = h_start
+        # Filter and sort crossing points
+        sorted_crossings = sorted([crossing for crossing in crossing_points if abs(crossing[1] - h_start[1]) <= 1 and h_start[0] <= crossing[0] <= h_end[0]], key=lambda x: x[0])
+        for crossing in sorted_crossings:
+            new_horizontal_lines.append({'x1': current_start[0], 'y1': current_start[1], 'x2': crossing[0], 'y2': h_start[1]})
+            current_start = (crossing[0], h_start[1])
+        new_horizontal_lines.append({'x1': current_start[0], 'y1': current_start[1], 'x2': h_end[0], 'y2': h_end[1]})
+    return pd.DataFrame(new_horizontal_lines)
+
+def split_vertical_lines_at_via_crossing(vertical_lines, crossing_points):
+    """
+    Split vertical lines at via crossing points.
+    
+    Parameters:
+    vertical_lines (pd.DataFrame): DataFrame containing vertical lines with columns ['x1', 'y1', 'x2', 'y2'].
+    crossing_points (list): List of crossing points as tuples (x, y).
+    
+    Returns:
+    pd.DataFrame: DataFrame containing new vertical lines with columns ['x1', 'y1', 'x2', 'y2'].
+    """
+    new_vertical_lines = []
+    for v_idx, v_line in vertical_lines.iterrows():
+        v_start = (v_line['x1'], v_line['y1'])
+        v_end = (v_line['x2'], v_line['y2'])
+        current_start = v_start
+        sorted_crossings = sorted([crossing for crossing in crossing_points if abs(crossing[0] - current_start[0]) <= 1 and current_start[1] <= crossing[1] <= v_end[1]], key=lambda x: x[1])
+        for crossing in sorted_crossings:
+            new_vertical_lines.append({'x1': current_start[0], 'y1': current_start[1], 'x2': current_start[0], 'y2': crossing[1]})
+            current_start = (current_start[0], crossing[1])
+        new_vertical_lines.append({'x1': current_start[0], 'y1': current_start[1], 'x2': v_end[0], 'y2': v_end[1]})
+    return pd.DataFrame(new_vertical_lines)
+
+
+def process_combined_lines(df_split_horizontal_at_vias, df_split_vertical_at_vias):
+    """
+    Merge both DataFrames into a single DataFrame, drop lines where x1=x2 and y1=y2, assign unique IDs to each line,
+    convert to the specified format, select the required columns, and display the final DataFrame.
+    
+    Parameters:
+    df_split_horizontal_at_vias (pd.DataFrame): DataFrame containing split horizontal lines.
+    df_split_vertical_at_vias (pd.DataFrame): DataFrame containing split vertical lines.
+    
+    Returns:
+    pd.DataFrame: Processed DataFrame with combined lines.
+    """
+    # Merge both DataFrames into a single DataFrame
+    df_combined_lines_M1_splited = pd.concat([df_split_horizontal_at_vias, df_split_vertical_at_vias], ignore_index=True)
+
+    # Drop lines where x1=x2 and y1=y2
+    df_combined_lines_M1_splited = df_combined_lines_M1_splited[~((df_combined_lines_M1_splited['x1'] == df_combined_lines_M1_splited['x2']) & (df_combined_lines_M1_splited['y1'] == df_combined_lines_M1_splited['y2']))]
+
+    # Assign unique IDs to each line
+    df_combined_lines_M1_splited = df_combined_lines_M1_splited.assign(ID=range(1, len(df_combined_lines_M1_splited) + 1))
+
+    # Convert to the specified format
+    df_combined_lines_M1_splited['start'] = list(zip(df_combined_lines_M1_splited['x1'], df_combined_lines_M1_splited['y1']))
+    df_combined_lines_M1_splited['end'] = list(zip(df_combined_lines_M1_splited['x2'], df_combined_lines_M1_splited['y2']))
+
+    # Select the required columns
+    df_combined_lines_M1_splited = df_combined_lines_M1_splited[['ID', 'start', 'end']]
+    return df_combined_lines_M1_splited
+
+
+
+
+
+# Find crossing points using optimized method
+crossing_points_M1 = find_crossing_points_optimized(vertical_df_M1, horizontal_df_M1)
+
+# Split vertical lines
+split_lines_M1 = split_vertical_lines(vertical_df_M1, crossing_points_M1)
+
+# Convert to DataFrame
+split_lines_data_M1 = []
+for line in split_lines_M1:
+    x1, y1 = line['start']
+    x2, y2 = line['end']
+    split_lines_data_M1.append({'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
+
+updated_split_lines_vertical_M1 = pd.DataFrame(split_lines_data_M1)
+
+store_vertical_M1 = updated_split_lines_vertical_M1
+store_horizontal_M1 = horizontal_df_M1
+stored_M1_df = pd.concat([store_horizontal_M1, store_vertical_M1 ], ignore_index=True)
+
+
+
+
+# Find crossing points using optimized method
+crossing_points_M2 = find_crossing_points_optimized(vertical_df_M2, horizontal_df_M2)
+
+# Split vertical lines
+split_lines_M2 = split_vertical_lines(vertical_df_M2, crossing_points_M2)
+
+# Convert to DataFrame
+split_lines_data_M2 = []
+for line in split_lines_M2:
+    x1, y1 = line['start']
+    x2, y2 = line['end']
+    split_lines_data_M2.append({'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
+
+updated_split_lines_vertical_M2 = pd.DataFrame(split_lines_data_M2)
+
+store_vertical_M2 = updated_split_lines_vertical_M2
+store_horizontal_M2 = horizontal_df_M2
+stored_M2_df = pd.concat([store_horizontal_M2, store_vertical_M2 ], ignore_index=True)
+
+
+
+# Find crossing points using optimized method
+crossing_points_M3 = find_crossing_points_optimized(vertical_df_M3, horizontal_df_M3)
+
+# Split vertical lines
+split_lines_M3 = split_vertical_lines(vertical_df_M3, crossing_points_M3)
+
+# Convert to DataFrame
+split_lines_data_M3 = []
+for line in split_lines_M3:
+    x1, y1 = line['start']
+    x2, y2 = line['end']
+    split_lines_data_M3.append({'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
+
+updated_split_lines_vertical_M3 = pd.DataFrame(split_lines_data_M3)
+
+store_vertical_M3 = updated_split_lines_vertical_M3
+store_horizontal_M3 = horizontal_df_M3
+stored_M3_df = pd.concat([store_horizontal_M3, store_vertical_M3], ignore_index=True)
+
+
+# Find crossing points using optimized method
+crossing_points_M4 = find_crossing_points_optimized(vertical_df_M4, horizontal_df_M4)
+
+# Split vertical lines
+split_lines_M4 = split_vertical_lines(vertical_df_M4, crossing_points_M4)
+
+# Convert to DataFrame
+split_lines_data_M4 = []
+for line in split_lines_M4:
+    x1, y1 = line['start']
+    x2, y2 = line['end']
+    split_lines_data_M4.append({'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
+
+updated_split_lines_vertical_M4 = pd.DataFrame(split_lines_data_M4)
+
+store_vertical_M4 = updated_split_lines_vertical_M4
+store_horizontal_M4 = horizontal_df_M4
+stored_M4_df = pd.concat([store_horizontal_M4, store_vertical_M4], ignore_index=True)
+
+
+
+intersect_M1_M2 = optimized_find_intersections(stored_M1_df,stored_M2_df)
+intersect_M2_M3 = optimized_find_intersections(stored_M2_df,stored_M3_df)
+intersect_M3_M4 = optimized_find_intersections(stored_M3_df,stored_M4_df)
+
+
+adjusted_vias_M1, split_for_M2 = optimized_adjust_vias_intersection(centroids_M1, intersect_M1_M2, radius=5)
+adjusted_vias_M2, split_for_M3  = optimized_adjust_vias_intersection(centroids_M2, intersect_M2_M3, radius=5)
+adjusted_vias_M3, split_for_M4  = optimized_adjust_vias_intersection(centroids_M3, intersect_M3_M4, radius=5)
+
+
+df_updated_horizontal_M2 = split_horizontal_lines_at_via_crossing(store_horizontal_M2, split_for_M2)
+df_updated_vertical_M2 = split_vertical_lines_at_via_crossing(store_vertical_M2, split_for_M2)
+
+df_updated_horizontal_M3 = split_horizontal_lines_at_via_crossing(store_horizontal_M3, split_for_M3)
+df_updated_vertical_M3 = split_vertical_lines_at_via_crossing(store_vertical_M3, split_for_M3)
+
+df_updated_horizontal_M4 = split_horizontal_lines_at_via_crossing(store_horizontal_M4, split_for_M4)
+df_updated_vertical_M4 = split_vertical_lines_at_via_crossing(store_vertical_M4, split_for_M4)
+
+
+df_final_M1 = process_combined_lines(store_horizontal_M1, store_vertical_M1)
+df_final_M2 = process_combined_lines(df_updated_horizontal_M2, df_updated_vertical_M2)
+df_final_M3 = process_combined_lines(df_updated_horizontal_M3, df_updated_vertical_M3)
+df_final_M4 = process_combined_lines(df_updated_horizontal_M4, df_updated_vertical_M4)
+
+
+def add_coordinates(df, x_offset, y_offset):
+    """
+    Add x and y coordinates to the start and end points of the lines in the DataFrame.
+    
+    Parameters:
+    df (pd.DataFrame): DataFrame containing lines with columns ['start', 'end'].
+    x_offset (int): Offset to be added to the x coordinate.
+    y_offset (int): Offset to be added to the y coordinate.
+    
+    Returns:
+    pd.DataFrame: DataFrame with updated coordinates.
+    """
+    df['start'] = df['start'].apply(lambda coord: (coord[0] + x_offset, coord[1] + y_offset))
+    df['end'] = df['end'].apply(lambda coord: (coord[0] + x_offset, coord[1] + y_offset))
+    return df
+
+
+
+# Add a source column to each DataFrame
+df_final_M1['source'] = 'M1'
+df_final_M2['source'] = 'M2'
+df_final_M3['source'] = 'M3'
+#df_final_M4['source'] = 'M4'
+
+# Apply the function to each DataFrame
+x_offset = 0
+y_offset = 0
+
+df_final_M1 = add_coordinates(df_final_M1, x_offset, y_offset)
+df_final_M2 = add_coordinates(df_final_M2, x_offset, y_offset)
+df_final_M3 = add_coordinates(df_final_M3, x_offset, y_offset)
+#df_final_M4 = add_coordinates(df_final_M4, x_offset, y_offset)
+
+# Merge the DataFrames
+df_final = pd.concat([df_final_M1, df_final_M2, df_final_M3], ignore_index=True)
+
+# Reset netlineid to ensure continuous counting
+df_final['ID'] = range(1, len(df_final) + 1)
+
+# Display the final DataFrame
+print("Final Combined DataFrame with Source:")
+print(df_final)
+
+
