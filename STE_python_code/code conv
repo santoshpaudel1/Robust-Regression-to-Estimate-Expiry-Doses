@@ -421,4 +421,130 @@ df_final['ID'] = range(1, len(df_final) + 1)
 df_final = add_coordinates(df_final, 0, 0)
 
 
+########## pipeline 2#########################3
+
+
+import yaml
+import cv2
+import os
+import time
+import numpy as np
+import pandas as pd
+from src.inference.image_loader import load_metal_layers
+from src.inference.via_detector import detect_vias, optimized_adjust_vias_intersection
+from src.inference.netlink_extractor import (
+    find_crossing_points_optimized,
+    split_vertical_lines,
+    split_horizontal_lines_at_via_crossing,
+    split_vertical_lines_at_via_crossing,
+    process_combined_lines,
+)
+from src.inference.metal_layer_processor import process_single_metal_layer
+from src.utils.geometry import convert_dataframe_coordinates
+from src.utils.visualization import plot_final_lines
+
+
+def main(config_path):
+    print("[INFO] Starting ICNetExtractor inference pipeline")
+
+    with open(config_path) as f:
+        config_paths = yaml.safe_load(f)
+    with open("configs/inference.yaml") as f:
+        config = yaml.safe_load(f)
+
+    print("[INFO] Loading metal layer images...")
+    metal_layers = load_metal_layers(config_paths['metal_images'])
+    metal_names = list(metal_layers.keys())
+
+    stored_layers = {}
+    stored_vias = {}
+    df_finals = []
+
+    for i, layer in enumerate(metal_names):
+        print(f"[INFO] ====================== Processing Layer: {layer} ======================")
+        image = metal_layers[layer]
+
+        print("[INFO]  > Segmenting and classifying components...")
+        vertical_df, horizontal_df, simple_img, complex_img = process_single_metal_layer(
+            image,
+            config['grouping']['eps_primary'],
+            config['grouping']['eps_secondary']
+        )
+
+        print("[INFO]  > Detecting vias...")
+        vias_image, centroids = detect_vias(
+            image,
+            config['via_detection']['threshold_percentage'],
+            config['via_detection']['contour_size']
+        )
+        stored_vias[layer] = centroids
+
+        # Split vertical lines at self-crossings (works for all layers, useful especially for M0)
+        crossing_points = find_crossing_points_optimized(vertical_df, horizontal_df)
+        vertical_df = pd.DataFrame([{'x1': l['start'][0], 'y1': l['start'][1], 'x2': l['end'][0], 'y2': l['end'][1]}
+                                     for l in split_vertical_lines(vertical_df, crossing_points)])
+
+        # Handle M1+ layers
+        if i > 0:
+            prev_layer = metal_names[i - 1]
+            print(f"[INFO]  > Computing inter-layer intersections with {prev_layer}...")
+
+            # Combine previous layer's vertical and horizontal lines
+            prev_df = pd.concat([stored_layers[prev_layer]['vertical'], stored_layers[prev_layer]['horizontal']], ignore_index=True)
+
+            intersections = find_crossing_points_optimized(prev_df, pd.concat([vertical_df, horizontal_df], ignore_index=True))
+            adjusted_vias, split_points = optimized_adjust_vias_intersection(stored_vias[prev_layer], intersections, radius=5)
+
+            print("[INFO]  > Splitting lines at adjusted via intersections...")
+            vertical_df = split_vertical_lines_at_via_crossing(vertical_df, split_points)
+            horizontal_df = split_horizontal_lines_at_via_crossing(horizontal_df, split_points)
+
+        stored_layers[layer] = {
+            'vertical': vertical_df,
+            'horizontal': horizontal_df,
+        }
+
+        print(f"[INFO]  > Saving visualization for {layer}...")
+        vis = plot_final_lines(horizontal_df, vertical_df, image.shape)
+        vis_path = os.path.join(config_paths['output_visualizations'], f"{layer}_netlines.png")
+        cv2.imwrite(vis_path, vis)
+
+        print(f"[INFO]  > Formatting lines for CSF export for {layer}...")
+        combined_df = process_combined_lines(horizontal_df, vertical_df)
+        combined_df['source'] = layer
+        df_finals.append(combined_df)
+
+    print("[INFO]  > Concatenating and converting to IC Explorer coordinates...")
+    df_final = pd.concat(df_finals, ignore_index=True)
+    df_final['ID'] = range(1, len(df_final) + 1)
+    df_final = convert_dataframe_coordinates(
+        df_final,
+        np.zeros_like(metal_layers[metal_names[0]]),
+        config_paths['top_left'],
+        config_paths['bottom_right']
+    )
+
+    print("[INFO]  > Writing CSF file...")
+    output_file = config_paths['output_file']
+    with open(output_file, 'w') as f:
+        for i, row in df_final.iterrows():
+            x1, y1 = row['start']
+            x2, y2 = row['end']
+            layer_num = 3 + metal_names.index(row['source'])
+            netline_id = f"0x{0x10000000 + i + 1:08x}"
+            line = f"netline id={netline_id} layer={layer_num} magic=0x00000000 left={x1} right={x2} top={y1} bottom={y2}"
+            f.write(line + '\n')
+
+    print(f"[INFO] Inference complete. CSF saved to {output_file}")
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 2:
+        print("Usage: python inference.py <config_path>")
+    else:
+        main(sys.argv[1])
+
+
+
 
