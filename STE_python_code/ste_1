@@ -3418,7 +3418,32 @@ def create_composite_image(components, image_shape):
 
 
 
+/////// vias ///////
 
+
+n')
+
+    # ---- Save intersection points between adjacent layers ----
+    print("[INFO] Saving via-intersection split points...")
+    df_intersections_list = []
+    for i in range(1, len(metal_names)):  # from M1 onward
+        layer_prev = metal_names[i - 1]
+        layer_curr = metal_names[i]
+        key = layer_curr  # e.g., split_for_next['M2']
+        if key in split_for_next:
+            df_inter = pd.DataFrame(split_for_next[key], columns=['x', 'y'])
+            df_inter['layer'] = f"{layer_prev}_{layer_curr}"
+            df_intersections_list.append(df_inter)
+
+    if df_intersections_list:
+        df_intersections = pd.concat(df_intersections_list, ignore_index=True)
+        intersection_output_path = os.path.join(config_paths['output_visualizations'], "intersections.csv")
+        df_intersections.to_csv(intersection_output_path, index=False)
+        print(f"[INFO] Intersection CSV saved to: {intersection_output_path}")
+    else:
+        print("[INFO] No via-intersection points found to save.")
+
+    print(f"[INFO] Inference complete. CSF sa
 
 
 
