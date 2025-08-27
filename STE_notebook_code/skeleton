@@ -1,0 +1,351 @@
+import numpy as np
+import cv2
+from skimage.morphology import skeletonize
+from skimage.util import img_as_bool
+
+# -----------------------------
+# Neighborhood + degree helpers
+# -----------------------------
+def neighbors8(y, x, h, w):
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy == 0 and dx == 0:
+                continue
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < h and 0 <= nx < w:
+                yield ny, nx
+
+def degree_map(skel_u8):
+    h, w = skel_u8.shape
+    deg = np.zeros_like(skel_u8, dtype=np.uint8)
+    ys, xs = np.where(skel_u8 > 0)
+    for y, x in zip(ys, xs):
+        cnt = 0
+        for ny, nx in neighbors8(y, x, h, w):
+            if skel_u8[ny, nx]:
+                cnt += 1
+        deg[y, x] = cnt
+    return deg
+
+# -----------------------------
+# Polyline simplify (RDP)
+# -----------------------------
+def rdp(points, eps=2.0):
+    if len(points) < 3:
+        return points
+    p0, p1 = points[0], points[-1]
+    line = p1 - p0
+    L2 = float((line**2).sum())
+    if L2 == 0.0:
+        dists = np.linalg.norm(points - p0, axis=1)
+    else:
+        t = np.clip(((points - p0) @ line) / L2, 0.0, 1.0)
+        proj = p0 + np.outer(t, line)
+        dists = np.linalg.norm(points - proj, axis=1)
+    idx = int(np.argmax(dists))
+    dmax = float(dists[idx])
+    if dmax > eps:
+        left = rdp(points[:idx+1], eps)
+        right = rdp(points[idx:], eps)
+        return np.vstack([left[:-1], right])
+    else:
+        return np.vstack([p0, p1])
+
+# -----------------------------
+# Trace skeleton paths between keypoints
+# -----------------------------
+def trace_paths(skel_u8):
+    """
+    Returns list of polylines; each is list of (x,y) ints.
+    """
+    h, w = skel_u8.shape
+    deg = degree_map(skel_u8)
+    visited = np.zeros_like(skel_u8, dtype=bool)
+
+    keypoints = set(zip(*np.where(((deg == 1) | (deg >= 3)) & (skel_u8 > 0))))
+    seeds = list(zip(*np.where((deg == 1) & (skel_u8 > 0))))
+    seeds += list(zip(*np.where((deg >= 3) & (skel_u8 > 0))))
+
+    paths = []
+    for sy, sx in seeds:
+        if not (0 <= sy < h and 0 <= sx < w):
+            continue
+        if not skel_u8[sy, sx]:
+            continue
+
+        nbrs = [(ny, nx) for ny, nx in neighbors8(sy, sx, h, w) if skel_u8[ny, nx]]
+        if len(nbrs) == 0 and (sy, sx) in keypoints:
+            if not visited[sy, sx]:
+                paths.append([(sx, sy), (sx, sy)])
+                visited[sy, sx] = True
+            continue
+
+        for ny, nx in nbrs:
+            if visited[ny, nx] and visited[sy, sx]:
+                continue
+
+            poly = [(sx, sy)]
+            py, px = sy, sx
+            cy, cx = ny, nx
+            while True:
+                poly.append((cx, cy))
+                visited[cy, cx] = True
+
+                if (cy, cx) in keypoints and (cy, cx) != (sy, sx):
+                    break
+
+                nxt = []
+                for yy, xx in neighbors8(cy, cx, h, w):
+                    if not skel_u8[yy, xx]:
+                        continue
+                    if (yy, xx) == (py, px):
+                        continue
+                    nxt.append((yy, xx))
+
+                if len(nxt) == 0:
+                    break
+
+                if len(nxt) > 1:
+                    # prefer straight continuation
+                    v_prev = np.array([cx - px, cy - py], dtype=float)
+                    best = None
+                    best_cost = 1e9
+                    for yy, xx in nxt:
+                        v = np.array([xx - cx, yy - cy], dtype=float)
+                        vp = float(np.linalg.norm(v_prev) * np.linalg.norm(v))
+                        cost = 1.0 if vp == 0.0 else 1.0 - float(v_prev @ v) / vp
+                        if cost < best_cost:
+                            best_cost = cost
+                            best = (yy, xx)
+                    ny2, nx2 = best
+                else:
+                    ny2, nx2 = nxt[0]
+
+                py, px, cy, cx = cy, cx, ny2, nx2
+
+            if len(poly) >= 2:
+                paths.append(poly)
+
+    # Deduplicate by endpoints (order-independent)
+    unique = []
+    seen = set()
+    for poly in paths:
+        key = (poly[0], poly[-1]) if poly[0] <= poly[-1] else (poly[-1], poly[0])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(poly)
+    return unique
+
+# -----------------------------
+# Segmentization + snapping (yellow raw)
+# -----------------------------
+def segmentize(poly):
+    return [(poly[i], poly[i+1]) for i in range(len(poly)-1)]
+
+def manhattanize_pair(p0, p1, snap_tol=2):
+    """
+    Return 1 or 2 H/V segments approximating (p0->p1).
+    Diagonals -> tiny L with corner near the midpoint.
+    """
+    (x1, y1), (x2, y2) = p0, p1
+    dx, dy = x2 - x1, y2 - y1
+    adx, ady = abs(dx), abs(dy)
+    out = []
+
+    if ady <= snap_tol and adx != 0:
+        y = int(round((y1 + y2) / 2.0))
+        out.append({'ori':'H', 'p1':(int(round(x1)), y), 'p2':(int(round(x2)), y)})
+        return out
+    if adx <= snap_tol and ady != 0:
+        x = int(round((x1 + x2) / 2.0))
+        out.append({'ori':'V', 'p1':(x, int(round(y1))), 'p2':(x, int(round(y2)))})
+        return out
+
+    # diagonal -> L
+    c1 = (int(round(x1)), int(round(y2)))  # HV
+    c2 = (int(round(x2)), int(round(y1)))  # VH
+    xm, ym = (x1 + x2)/2.0, (y1 + y2)/2.0
+    s1 = abs(c1[0]-xm) + abs(c1[1]-ym)
+    s2 = abs(c2[0]-xm) + abs(c2[1]-ym)
+    if s1 <= s2:
+        y = int(round(y1)); x = int(round(x2))
+        out.append({'ori':'H', 'p1':(int(round(x1)), y), 'p2':(x, y)})
+        out.append({'ori':'V', 'p1':(x, y), 'p2':(x, int(round(y2)))})
+    else:
+        x = int(round(x1)); y = int(round(y2))
+        out.append({'ori':'V', 'p1':(x, int(round(y1))), 'p2':(x, y)})
+        out.append({'ori':'H', 'p1':(x, y), 'p2':(int(round(x2)), y)})
+    return out
+
+# -----------------------------
+# Micro-bridge tiny gaps between endpoints (keep yellow style)
+# -----------------------------
+def _endpoint_list(segments):
+    eps = []
+    for idx, s in enumerate(segments):
+        eps.append((s['p1'][0], s['p1'][1], idx, 0))
+        eps.append((s['p2'][0], s['p2'][1], idx, 1))
+    return eps
+
+def _dist2(a, b):
+    dx = a[0]-b[0]; dy = a[1]-b[1]
+    return dx*dx + dy*dy
+
+def bridge_micro_gaps(raw_segments, max_gap=2, align_tol=2):
+    """
+    Add tiny H/V (or tiny L) connectors between endpoints closer than max_gap.
+    Does NOT remove or merge existing segments; it only adds short bridges.
+    """
+    if not raw_segments:
+        return raw_segments[:]
+
+    endpoints = _endpoint_list(raw_segments)
+    pts = [(x, y) for (x, y, _, _) in endpoints]
+
+    # index endpoints by coarse grid to avoid O(n^2) on big images
+    r = max(1, int(round(max_gap)))
+    grid = {}
+    for i, (x, y) in enumerate(pts):
+        key = (x // r, y // r)
+        grid.setdefault(key, []).append(i)
+
+    def neighbors_idx(i):
+        gx, gy = pts[i][0] // r, pts[i][1] // r
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                key = (gx+dx, gy+dy)
+                for j in grid.get(key, []):
+                    if j != i:
+                        yield j
+
+    added = []
+    seen_pairs = set()
+    max_d2 = max_gap * max_gap
+
+    for i in range(len(pts)):
+        for j in neighbors_idx(i):
+            if j < i:
+                continue
+            pi = pts[i]; pj = pts[j]
+            if _dist2(pi, pj) > max_d2:
+                continue
+            pair_key = (pi, pj)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+
+            # prefer single H or V if nearly aligned; else tiny L
+            xi, yi = pi; xj, yj = pj
+            if abs(yi - yj) <= align_tol:
+                y = int(round((yi + yj)/2))
+                added.append({'ori':'H', 'p1':(int(round(xi)), y), 'p2':(int(round(xj)), y)})
+            elif abs(xi - xj) <= align_tol:
+                x = int(round((xi + xj)/2))
+                added.append({'ori':'V', 'p1':(x, int(round(yi))), 'p2':(x, int(round(yj)))})
+            else:
+                # tiny L: choose shortest of (xi,yj) or (xj,yi)
+                c1 = (int(round(xi)), int(round(yj)))
+                c2 = (int(round(xj)), int(round(yi)))
+                len1 = abs(c1[0]-xi) + abs(c1[1]-yi) + abs(xj-c1[0]) + abs(yj-c1[1])
+                len2 = abs(c2[0]-xi) + abs(c2[1]-yi) + abs(xj-c2[0]) + abs(yj-c2[1])
+                if len1 <= len2:
+                    added.append({'ori':'H', 'p1':(xi, yi), 'p2':(c1[0], yi)})
+                    added.append({'ori':'V', 'p1':(c1[0], yi), 'p2':(c1[0], yj)})
+                else:
+                    added.append({'ori':'V', 'p1':(xi, yi), 'p2':(xi, c2[1])})
+                    added.append({'ori':'H', 'p1':(xi, c2[1]), 'p2':(xj, c2[1])})
+
+    return raw_segments + added
+
+# -----------------------------
+# Draw utilities
+# -----------------------------
+def draw_segments(shape, segments, thickness=1, color=(0,255,255)):
+    canvas = np.zeros((shape[0], shape[1], 3), dtype=np.uint8)
+    for s in segments:
+        cv2.line(canvas, s['p1'], s['p2'], color, thickness, lineType=cv2.LINE_AA)
+    return canvas
+
+# -----------------------------
+# Main: yellow raw + gap-bridged yellow
+# -----------------------------
+def yellow_with_tight_connections(binary_mask,
+                                  rdp_eps=2.0,
+                                  snap_tol=2,
+                                  min_seg_len=3,
+                                  bridge_gap=2,
+                                  align_tol=2,
+                                  visualize=True):
+    """
+    Produces:
+      - raw_yellow_segments (snapped H/V + tiny Ls)
+      - bridged_yellow_segments (raw + micro connectors for 1–2 px gaps)
+      - dbg_raw_yellow image
+      - dbg_bridged_yellow image
+    """
+    assert binary_mask.ndim == 2
+    skel = skeletonize(img_as_bool(binary_mask > 0))
+    skel_u8 = (skel.astype(np.uint8)) * 255
+
+    # Trace & simplify
+    paths = trace_paths(skel_u8)
+
+    # Yellow raw (snapped per-step)
+    raw_segments = []
+    for poly in paths:
+        pts = np.array([[x, y] for (x, y) in poly], dtype=np.float32)
+        simp = rdp(pts, eps=rdp_eps)
+        simp = [(int(round(x)), int(round(y))) for x, y in simp]
+        for p0, p1 in segmentize(simp):
+            for seg in manhattanize_pair(p0, p1, snap_tol=snap_tol):
+                if seg['ori'] == 'H':
+                    if abs(seg['p2'][0] - seg['p1'][0]) + 1 >= min_seg_len:
+                        raw_segments.append(seg)
+                else:
+                    if abs(seg['p2'][1] - seg['p1'][1]) + 1 >= min_seg_len:
+                        raw_segments.append(seg)
+
+    # Visualize raw yellow
+    dbg_raw_yellow = draw_segments(binary_mask.shape, raw_segments, thickness=1, color=(0,255,255)) if visualize else None
+
+    # Add only tiny connectors for 1–2 px gaps (junctions / inclined steps)
+    bridged_segments = bridge_micro_gaps(raw_segments, max_gap=bridge_gap, align_tol=align_tol)
+
+    dbg_bridged_yellow = draw_segments(binary_mask.shape, bridged_segments, thickness=1, color=(0,255,255)) if visualize else None
+
+    return raw_segments, bridged_segments, skel_u8, dbg_raw_yellow, dbg_bridged_yellow
+
+# -----------------------------
+# Example
+# -----------------------------
+if __name__ == "__main__":
+    # Update this to your binary (or near-binary) mask
+    image_path = r"C:\Users\santo\Downloads\Test_140_M0_sample_1.png"
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise FileNotFoundError("Update image_path to a valid PNG.")
+
+    # Ensure 0/255
+    if img.max() > 1:
+        _, bin_mask = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    else:
+        bin_mask = (img > 0).astype(np.uint8) * 255
+
+    raw_yellow, bridged_yellow, skel_img, dbg_raw, dbg_bridged = yellow_with_tight_connections(
+        bin_mask,
+        rdp_eps=2.0,      # raise (2.5–3.5) if skeleton is staircased
+        snap_tol=2,       # treat ≤2 px tilt as axis-aligned
+        min_seg_len=3,    # keep small pieces to preserve graph, we bridge after
+        bridge_gap=2,     # <- key: connect endpoints ≤2 px apart
+        align_tol=2,      # single H or V if near-same y/x; else tiny L
+        visualize=True
+    )
+
+    print(f"Yellow RAW segments : {len(raw_yellow)}")
+    print(f"Yellow BRIDGED segs: {len(bridged_yellow)} (raw + tiny connectors)")
+    cv2.imshow("Skeleton", skel_img)
+    cv2.imshow("Yellow RAW", dbg_raw)
+    cv2.imshow("Yellow (tight connections)", dbg_bridged)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
