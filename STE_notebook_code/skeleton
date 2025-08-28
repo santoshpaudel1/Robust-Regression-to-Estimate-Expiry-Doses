@@ -349,3 +349,817 @@ if __name__ == "__main__":
     cv2.imshow("Yellow (tight connections)", dbg_bridged)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
+
+
+import numpy as np
+import cv2
+from skimage.morphology import skeletonize
+from skimage.util import img_as_bool
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def neighbors8(y, x, h, w):
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy == 0 and dx == 0:
+                continue
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < h and 0 <= nx < w:
+                yield ny, nx
+
+def degree_map(skel):
+    h, w = skel.shape
+    deg = np.zeros_like(skel, dtype=np.uint8)
+    ys, xs = np.where(skel > 0)
+    for y, x in zip(ys, xs):
+        c = 0
+        for ny, nx in neighbors8(y, x, h, w):
+            if skel[ny, nx]:
+                c += 1
+        deg[y, x] = c
+    return deg
+
+def extract_graph_edges(skel_u8):
+    """
+    Build a graph from the skeleton and extract edges as pixel polylines
+    between graph nodes (deg != 2). Returns:
+      nodes: list of (x,y) for each node id
+      edges: list of dicts {'u':node_id, 'v':node_id, 'poly':[(x,y),...]}
+      dbg_paths_img: visualization of traced paths (no loops)
+    """
+    h, w = skel_u8.shape
+    skel = (skel_u8 > 0).astype(np.uint8)
+    deg = degree_map(skel)
+    nodes_mask = (skel > 0) & (deg != 2)   # endpoints (1) and junctions (>=3)
+    ny, nx = np.where(nodes_mask)
+    nodes_xy = [(int(x), int(y)) for y, x in zip(ny, nx)]
+    node_id = {(y, x): i for i, (x, y) in enumerate(nodes_xy)}
+
+    visited_step = set()
+    edges = []
+
+    for (y0, x0) in zip(ny, nx):
+        for ny1, nx1 in neighbors8(y0, x0, h, w):
+            if not skel[ny1, nx1]:
+                continue
+            key = (y0, x0, ny1, nx1)
+            if key in visited_step:
+                continue
+            poly = [(int(x0), int(y0))]
+            py, px = y0, x0
+            cy, cx = ny1, nx1
+            while True:
+                visited_step.add((py, px, cy, cx))
+                visited_step.add((cy, cx, py, px))
+                poly.append((int(cx), int(cy)))
+                if nodes_mask[cy, cx]:  # reached another node
+                    u = node_id[(y0, x0)]
+                    v = node_id[(cy, cx)]
+                    if len(poly) >= 2:
+                        edges.append({'u': u, 'v': v, 'poly': poly})
+                    break
+                nxt = []
+                for yy, xx in neighbors8(cy, cx, h, w):
+                    if not skel[yy, xx]:
+                        continue
+                    if (yy, xx) == (py, px):
+                        continue
+                    nxt.append((yy, xx))
+                if not nxt:
+                    # dangling edge inside corridor: promote to node
+                    if (cy, cx) not in node_id:
+                        nid = len(nodes_xy)
+                        nodes_xy.append((int(cx), int(cy)))
+                        node_id[(cy, cx)] = nid
+                        nodes_mask[cy, cx] = True
+                    u = node_id[(y0, x0)]
+                    v = node_id[(cy, cx)]
+                    edges.append({'u': u, 'v': v, 'poly': poly})
+                    break
+                if len(nxt) > 1:
+                    # choose straightest continuation
+                    v_prev = np.array([cx - px, cy - py], dtype=float)
+                    best = None
+                    best_cost = 1e9
+                    for yy, xx in nxt:
+                        v = np.array([xx - cx, yy - cy], dtype=float)
+                        denom = np.linalg.norm(v_prev) * np.linalg.norm(v)
+                        cost = 1.0 if denom == 0 else 1.0 - float(v_prev @ v) / denom
+                        if cost < best_cost:
+                            best_cost = cost
+                            best = (yy, xx)
+                    ny2, nx2 = best
+                else:
+                    ny2, nx2 = nxt[0]
+                py, px, cy, cx = cy, cx, ny2, nx2
+
+    dbg_paths = draw_polys((h, w), edges, color=(0, 255, 255), thickness=1)
+    return nodes_xy, edges, dbg_paths, deg
+
+def distance_to_skeleton(skel_u8):
+    inv = np.where(skel_u8 > 0, 0, 255).astype(np.uint8)
+    dt = cv2.distanceTransform(inv, cv2.DIST_L2, 3)
+    return dt
+
+def rect_path_cost(dt, p0, p1, middle, hv=True):
+    x0, y0 = p0; x1, y1 = p1
+    cost = 0.0
+    if hv:
+        y = int(middle)
+        for x in range(min(x0, x1), max(x0, x1) + 1):
+            cost += dt[y, x]
+        for yv in range(min(y, y1), max(y, y1) + 1):
+            cost += dt[yv, x1]
+    else:
+        x = int(middle)
+        for y in range(min(y0, y1), max(y0, y1) + 1):
+            cost += dt[y, x]
+        for xv in range(min(x, x1), max(x, x1) + 1):
+            cost += dt[y1, xv]
+    return cost
+
+def best_rect_route_for_edge(dt, p_start, p_end, search_halfwin=2):
+    x0, y0 = p_start
+    x1, y1 = p_end
+    y_anchor = y0
+    x_anchor = x0
+    best = None
+    for dy in range(-search_halfwin, search_halfwin + 1):
+        y_star = int(np.clip(y_anchor + dy, 0, dt.shape[0]-1))
+        c = rect_path_cost(dt, (x0, y0), (x1, y1), y_star, hv=True)
+        if best is None or c < best[0]:
+            best = (c, 'HV', y_star)
+    for dx in range(-search_halfwin, search_halfwin + 1):
+        x_star = int(np.clip(x_anchor + dx, 0, dt.shape[1]-1))
+        c = rect_path_cost(dt, (x0, y0), (x1, y1), x_star, hv=False)
+        if c < best[0]:
+            best = (c, 'VH', x_star)
+    _, kind, mid = best
+    if kind == 'HV':
+        corner = (x1, int(mid))
+        poly = [(x0, y0), corner, (x1, y1)]
+    else:
+        corner = (int(mid), y1)
+        poly = [(x0, y0), corner, (x1, y1)]
+    # drop degenerate corner if already aligned
+    if len(poly) == 3:
+        if poly[0][0] == poly[1][0] == poly[2][0] or poly[0][1] == poly[1][1] == poly[2][1]:
+            poly = [poly[0], poly[2]]
+    return poly
+
+def normalize_junction_anchors(nodes_xy, edges_polys):
+    from collections import defaultdict
+    proposals_x = defaultdict(list)
+    proposals_y = defaultdict(list)
+    for e in edges_polys:
+        u, v = e['u'], e['v']
+        pu = e['poly'][0]
+        pv = e['poly'][-1]
+        proposals_x[u].append(pu[0]); proposals_y[u].append(pu[1])
+        proposals_x[v].append(pv[0]); proposals_y[v].append(pv[1])
+    anchors = []
+    for nid, (x, y) in enumerate(nodes_xy):
+        ax = int(round(np.median(proposals_x.get(nid, [x]))))
+        ay = int(round(np.median(proposals_y.get(nid, [y]))))
+        anchors.append((ax, ay))
+    fixed = []
+    for e in edges_polys:
+        u, v = e['u'], e['v']
+        a = anchors[u]; b = anchors[v]
+        poly = e['poly']
+        if len(poly) == 2:
+            poly2 = [a, b]
+        else:
+            mid = poly[1]
+            if mid[1] == poly[0][1]:  # horizontal first
+                poly2 = [a, (b[0], a[1]), b]
+            else:                      # vertical first
+                poly2 = [a, (a[0], b[1]), b]
+            if poly2[0][0] == poly2[1][0] == poly2[2][0] or poly2[0][1] == poly2[1][1] == poly2[2][1]:
+                poly2 = [poly2[0], poly2[2]]
+        fixed.append({'u': u, 'v': v, 'poly': poly2})
+    return anchors, fixed
+
+def draw_polys(shape, edges_polys, color=(0,255,255), thickness=1):
+    h, w = shape
+    canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    for e in edges_polys:
+        pts = e['poly']
+        for i in range(len(pts)-1):
+            cv2.line(canvas, pts[i], pts[i+1], color, thickness, lineType=cv2.LINE_AA)
+    return canvas
+
+# -----------------------------
+# Loop detection & rectangularization
+# -----------------------------
+def trace_cycle_in_component(component_mask):
+    """Trace one cycle in a pure-loop component mask (8-connected, all deg==2)."""
+    h, w = component_mask.shape
+    ys, xs = np.where(component_mask)
+    if len(xs) == 0:
+        return []
+    pixset = set(zip(ys.tolist(), xs.tolist()))
+    start = min(pixset)  # lexicographically smallest (y,x)
+    py, px = None, None
+    cy, cx = start
+    path = [(int(cx), int(cy))]
+    visited = set()
+    while True:
+        nbrs = [n for n in neighbors8(cy, cx, h, w) if n in pixset]
+        if py is not None:
+            nbrs = [n for n in nbrs if n != (py, px)]
+        if not nbrs:
+            break
+        ny, nx = nbrs[0]
+        step = (cy, cx, ny, nx)
+        if step in visited:
+            break
+        visited.add(step)
+        py, px, cy, cx = cy, cx, ny, nx
+        path.append((int(cx), int(cy)))
+        if (cy, cx) == start and len(path) > 2:
+            break
+    return path
+
+def robust_rectangle_from_cycle(points, trim=0.10):
+    """Axis-aligned rectangle robustly fit from loop points using trimmed medians."""
+    if len(points) < 4:
+        return None
+    xs = sorted([p[0] for p in points])
+    ys = sorted([p[1] for p in points])
+    kx = max(1, int(round(trim * len(xs))))
+    ky = max(1, int(round(trim * len(ys))))
+    left  = int(round(np.median(xs[:kx])))
+    right = int(round(np.median(xs[-kx:])))
+    top   = int(round(np.median(ys[:ky])))
+    bot   = int(round(np.median(ys[-ky:])))
+    if right <= left:  # fallback
+        left, right = int(min(xs)), int(max(xs))
+    if bot <= top:
+        top, bot = int(min(ys)), int(max(ys))
+    corners = [(left, top), (right, top), (right, bot), (left, bot)]
+    return corners
+
+def detect_and_rectify_loops(skel_u8, deg, min_pixels=24, trim=0.10):
+    """
+    Find components with all pixels deg==2 (pure loops), trace once, and
+    return axis-aligned rectangular edges built from robust corners.
+    Returns:
+      loop_debug_edges (for visualization of traced cycle),
+      loop_nodes (list of corner points),
+      loop_edges (list of {'u','v','poly'}) referencing appended nodes.
+    """
+    skbin = (skel_u8 > 0).astype(np.uint8)
+    num, labels = cv2.connectedComponents(skbin, connectivity=8)
+    loop_debug_edges = []
+    loop_nodes = []
+    loop_edges = []
+    for lbl in range(1, num):
+        ys, xs = np.where(labels == lbl)
+        if len(xs) < min_pixels:
+            continue
+        deges = deg[ys, xs]
+        if np.all(deges == 2):
+            comp_mask = (labels == lbl).astype(np.uint8)
+            cycle_pts = trace_cycle_in_component(comp_mask)
+            if len(cycle_pts) < 4:
+                continue
+            rect = robust_rectangle_from_cycle(cycle_pts, trim=trim)
+            if rect is None:
+                continue
+            # For debug: show traced cycle as a poly
+            loop_debug_edges.append({'u': -1, 'v': -1, 'poly': cycle_pts})
+            # Create 4 nodes (corners) and 4 edges
+            base = len(loop_nodes)
+            loop_nodes.extend(rect)
+            edges_idx = [(0,1),(1,2),(2,3),(3,0)]
+            for a, b in edges_idx:
+                pa = loop_nodes[base + a]
+                pb = loop_nodes[base + b]
+                loop_edges.append({'u': base + a, 'v': base + b, 'poly': [pa, pb]})
+    return loop_debug_edges, loop_nodes, loop_edges
+
+# -----------------------------
+# Main pipeline
+# -----------------------------
+def ideal_manhattan_nets_with_loops(binary_mask,
+                                    search_halfwin=2,
+                                    loop_min_pixels=24,
+                                    loop_trim=0.10,
+                                    visualize=True):
+    """
+    Input: binary 0/255 mask.
+    Output: perfect, tight Manhattan nets with squared junctions and
+            rectangles recovered for pure ladder-like loops.
+    """
+    assert binary_mask.ndim == 2
+    skel = skeletonize(img_as_bool(binary_mask > 0))
+    skel_u8 = (skel.astype(np.uint8)) * 255
+
+    # 1) Graph (non-loop) extraction
+    nodes_xy, edges, dbg_paths_nonloops, deg = extract_graph_edges(skel_u8)
+
+    # 2) Detect & rectangularize pure loops
+    loop_dbg_edges, loop_corner_nodes, loop_rect_edges = detect_and_rectify_loops(
+        skel_u8, deg, min_pixels=loop_min_pixels, trim=loop_trim
+    )
+
+    # 3) Distance map for non-loop edge routing
+    dt = distance_to_skeleton(skel_u8)
+
+    # 4) For non-loop edges: choose HV/VH by distance
+    ortho_edges = []
+    for e in edges:
+        u, v = e['u'], e['v']
+        p0 = nodes_xy[u]
+        p1 = nodes_xy[v]
+        poly = best_rect_route_for_edge(dt, p0, p1, search_halfwin=search_halfwin)
+        ortho_edges.append({'u': u, 'v': v, 'poly': poly})
+
+    # 5) Combine nodes: original nodes + loop corner nodes (with offset)
+    nodes_all = list(nodes_xy)
+    loop_offset = len(nodes_all)
+    nodes_all.extend(loop_corner_nodes)
+
+    # 6) Offset loop edges' node ids and combine with ortho edges
+    loop_edges_offset = []
+    for le in loop_rect_edges:
+        loop_edges_offset.append({
+            'u': le['u'] + loop_offset,
+            'v': le['v'] + loop_offset,
+            'poly': le['poly']
+        })
+    combined_edges = ortho_edges + loop_edges_offset
+
+    # 7) Square all junctions (loops are already axis-aligned; this just aligns anchors)
+    anchors, squared_edges = normalize_junction_anchors(nodes_all, combined_edges)
+
+    if visualize:
+        h, w = binary_mask.shape
+        # raw path viz (non-loops) + traced loop polylines
+        dbg_paths = draw_polys((h, w), [{'u':e['u'], 'v':e['v'], 'poly':e['poly']} for e in edges],
+                               color=(0,255,255), thickness=1)
+        if loop_dbg_edges:
+            loops_vis = draw_polys((h, w), loop_dbg_edges, color=(0,255,255), thickness=1)
+            dbg_paths = cv2.addWeighted(dbg_paths, 1.0, loops_vis, 1.0, 0.0)
+
+        dbg_ortho = draw_polys((h, w), ortho_edges + loop_edges_offset, color=(0,255,255), thickness=1)
+        dbg_final = draw_polys((h, w), squared_edges, color=(0,255,255), thickness=1)
+        return {
+            'nodes': anchors,
+            'edges': squared_edges,
+            'skel': skel_u8,
+            'dbg_paths': dbg_paths,
+            'dbg_ortho': dbg_ortho,
+            'dbg_final': dbg_final
+        }
+
+    return {'nodes': anchors, 'edges': squared_edges}
+
+import numpy as np
+import cv2
+from skimage.morphology import skeletonize
+from skimage.util import img_as_bool
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def neighbors8(y, x, h, w):
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy == 0 and dx == 0:
+                continue
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < h and 0 <= nx < w:
+                yield ny, nx
+
+def degree_map(skel):
+    h, w = skel.shape
+    deg = np.zeros_like(skel, dtype=np.uint8)
+    ys, xs = np.where(skel > 0)
+    for y, x in zip(ys, xs):
+        c = 0
+        for ny, nx in neighbors8(y, x, h, w):
+            if skel[ny, nx]:
+                c += 1
+        deg[y, x] = c
+    return deg
+
+def extract_graph_edges(skel_u8):
+    """
+    Build a graph from the skeleton and extract edges as pixel polylines
+    between graph nodes (deg != 2). Returns:
+      nodes: list of (x,y) for each node id
+      edges: list of dicts {'u':node_id, 'v':node_id, 'poly':[(x,y),...]}
+      dbg_paths_img: visualization of traced paths (no loops)
+    """
+    h, w = skel_u8.shape
+    skel = (skel_u8 > 0).astype(np.uint8)
+    deg = degree_map(skel)
+    nodes_mask = (skel > 0) & (deg != 2)   # endpoints (1) and junctions (>=3)
+    ny, nx = np.where(nodes_mask)
+    nodes_xy = [(int(x), int(y)) for y, x in zip(ny, nx)]
+    node_id = {(y, x): i for i, (x, y) in enumerate(nodes_xy)}
+
+    visited_step = set()
+    edges = []
+
+    for (y0, x0) in zip(ny, nx):
+        for ny1, nx1 in neighbors8(y0, x0, h, w):
+            if not skel[ny1, nx1]:
+                continue
+            key = (y0, x0, ny1, nx1)
+            if key in visited_step:
+                continue
+            poly = [(int(x0), int(y0))]
+            py, px = y0, x0
+            cy, cx = ny1, nx1
+            while True:
+                visited_step.add((py, px, cy, cx))
+                visited_step.add((cy, cx, py, px))
+                poly.append((int(cx), int(cy)))
+                if nodes_mask[cy, cx]:  # reached another node
+                    u = node_id[(y0, x0)]
+                    v = node_id[(cy, cx)]
+                    if len(poly) >= 2:
+                        edges.append({'u': u, 'v': v, 'poly': poly})
+                    break
+                nxt = []
+                for yy, xx in neighbors8(cy, cx, h, w):
+                    if not skel[yy, xx]:
+                        continue
+                    if (yy, xx) == (py, px):
+                        continue
+                    nxt.append((yy, xx))
+                if not nxt:
+                    # dangling edge inside corridor: promote to node
+                    if (cy, cx) not in node_id:
+                        nid = len(nodes_xy)
+                        nodes_xy.append((int(cx), int(cy)))
+                        node_id[(cy, cx)] = nid
+                        nodes_mask[cy, cx] = True
+                    u = node_id[(y0, x0)]
+                    v = node_id[(cy, cx)]
+                    edges.append({'u': u, 'v': v, 'poly': poly})
+                    break
+                if len(nxt) > 1:
+                    # choose straightest continuation
+                    v_prev = np.array([cx - px, cy - py], dtype=float)
+                    best = None
+                    best_cost = 1e9
+                    for yy, xx in nxt:
+                        v = np.array([xx - cx, yy - cy], dtype=float)
+                        denom = np.linalg.norm(v_prev) * np.linalg.norm(v)
+                        cost = 1.0 if denom == 0 else 1.0 - float(v_prev @ v) / denom
+                        if cost < best_cost:
+                            best_cost = cost
+                            best = (yy, xx)
+                    ny2, nx2 = best
+                else:
+                    ny2, nx2 = nxt[0]
+                py, px, cy, cx = cy, cx, ny2, nx2
+
+    dbg_paths = draw_polys((h, w), edges, color=(0, 255, 255), thickness=1)
+    return nodes_xy, edges, dbg_paths, deg
+
+def distance_to_skeleton(skel_u8):
+    inv = np.where(skel_u8 > 0, 0, 255).astype(np.uint8)
+    dt = cv2.distanceTransform(inv, cv2.DIST_L2, 3)
+    return dt
+
+def rect_path_cost(dt, p0, p1, middle, hv=True):
+    x0, y0 = p0; x1, y1 = p1
+    cost = 0.0
+    if hv:
+        y = int(middle)
+        for x in range(min(x0, x1), max(x0, x1) + 1):
+            cost += dt[y, x]
+        for yv in range(min(y, y1), max(y, y1) + 1):
+            cost += dt[yv, x1]
+    else:
+        x = int(middle)
+        for y in range(min(y0, y1), max(y0, y1) + 1):
+            cost += dt[y, x]
+        for xv in range(min(x, x1), max(x, x1) + 1):
+            cost += dt[y1, xv]
+    return cost
+
+def best_rect_route_for_edge(dt, p_start, p_end, search_halfwin=2):
+    x0, y0 = p_start
+    x1, y1 = p_end
+    y_anchor = y0
+    x_anchor = x0
+    best = None
+    for dy in range(-search_halfwin, search_halfwin + 1):
+        y_star = int(np.clip(y_anchor + dy, 0, dt.shape[0]-1))
+        c = rect_path_cost(dt, (x0, y0), (x1, y1), y_star, hv=True)
+        if best is None or c < best[0]:
+            best = (c, 'HV', y_star)
+    for dx in range(-search_halfwin, search_halfwin + 1):
+        x_star = int(np.clip(x_anchor + dx, 0, dt.shape[1]-1))
+        c = rect_path_cost(dt, (x0, y0), (x1, y1), x_star, hv=False)
+        if c < best[0]:
+            best = (c, 'VH', x_star)
+    _, kind, mid = best
+    if kind == 'HV':
+        corner = (x1, int(mid))
+        poly = [(x0, y0), corner, (x1, y1)]
+    else:
+        corner = (int(mid), y1)
+        poly = [(x0, y0), corner, (x1, y1)]
+    # drop degenerate corner if already aligned
+    if len(poly) == 3:
+        if poly[0][0] == poly[1][0] == poly[2][0] or poly[0][1] == poly[1][1] == poly[2][1]:
+            poly = [poly[0], poly[2]]
+    return poly
+
+def normalize_junction_anchors(nodes_xy, edges_polys):
+    from collections import defaultdict
+    proposals_x = defaultdict(list)
+    proposals_y = defaultdict(list)
+    for e in edges_polys:
+        u, v = e['u'], e['v']
+        pu = e['poly'][0]
+        pv = e['poly'][-1]
+        proposals_x[u].append(pu[0]); proposals_y[u].append(pu[1])
+        proposals_x[v].append(pv[0]); proposals_y[v].append(pv[1])
+    anchors = []
+    for nid, (x, y) in enumerate(nodes_xy):
+        ax = int(round(np.median(proposals_x.get(nid, [x]))))
+        ay = int(round(np.median(proposals_y.get(nid, [y]))))
+        anchors.append((ax, ay))
+    fixed = []
+    for e in edges_polys:
+        u, v = e['u'], e['v']
+        a = anchors[u]; b = anchors[v]
+        poly = e['poly']
+        if len(poly) == 2:
+            poly2 = [a, b]
+        else:
+            mid = poly[1]
+            if mid[1] == poly[0][1]:  # horizontal first
+                poly2 = [a, (b[0], a[1]), b]
+            else:                      # vertical first
+                poly2 = [a, (a[0], b[1]), b]
+            if poly2[0][0] == poly2[1][0] == poly2[2][0] or poly2[0][1] == poly2[1][1] == poly2[2][1]:
+                poly2 = [poly2[0], poly2[2]]
+        fixed.append({'u': u, 'v': v, 'poly': poly2})
+    return anchors, fixed
+
+def draw_polys(shape, edges_polys, color=(0,255,255), thickness=1):
+    h, w = shape
+    canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    for e in edges_polys:
+        pts = e['poly']
+        for i in range(len(pts)-1):
+            cv2.line(canvas, pts[i], pts[i+1], color, thickness, lineType=cv2.LINE_AA)
+    return canvas
+
+# -----------------------------
+# Loop detection & rectangularization
+# -----------------------------
+def trace_cycle_in_component(component_mask):
+    """Trace one cycle in a pure-loop component mask (8-connected, all deg==2)."""
+    h, w = component_mask.shape
+    ys, xs = np.where(component_mask)
+    if len(xs) == 0:
+        return []
+    pixset = set(zip(ys.tolist(), xs.tolist()))
+    start = min(pixset)  # lexicographically smallest (y,x)
+    py, px = None, None
+    cy, cx = start
+    path = [(int(cx), int(cy))]
+    visited = set()
+    while True:
+        nbrs = [n for n in neighbors8(cy, cx, h, w) if n in pixset]
+        if py is not None:
+            nbrs = [n for n in nbrs if n != (py, px)]
+        if not nbrs:
+            break
+        ny, nx = nbrs[0]
+        step = (cy, cx, ny, nx)
+        if step in visited:
+            break
+        visited.add(step)
+        py, px, cy, cx = cy, cx, ny, nx
+        path.append((int(cx), int(cy)))
+        if (cy, cx) == start and len(path) > 2:
+            break
+    return path
+
+def robust_rectangle_from_cycle(points, trim=0.10):
+    """Axis-aligned rectangle robustly fit from loop points using trimmed medians."""
+    if len(points) < 4:
+        return None
+    xs = sorted([p[0] for p in points])
+    ys = sorted([p[1] for p in points])
+    kx = max(1, int(round(trim * len(xs))))
+    ky = max(1, int(round(trim * len(ys))))
+    left  = int(round(np.median(xs[:kx])))
+    right = int(round(np.median(xs[-kx:])))
+    top   = int(round(np.median(ys[:ky])))
+    bot   = int(round(np.median(ys[-ky:])))
+    if right <= left:  # fallback
+        left, right = int(min(xs)), int(max(xs))
+    if bot <= top:
+        top, bot = int(min(ys)), int(max(ys))
+    corners = [(left, top), (right, top), (right, bot), (left, bot)]
+    return corners
+
+def detect_and_rectify_loops(skel_u8, deg, min_pixels=24, trim=0.10):
+    """
+    Find components with all pixels deg==2 (pure loops), trace once, and
+    return axis-aligned rectangular edges built from robust corners.
+    Returns:
+      loop_debug_edges (for visualization of traced cycle),
+      loop_nodes (list of corner points),
+      loop_edges (list of {'u','v','poly'}) referencing appended nodes.
+    """
+    skbin = (skel_u8 > 0).astype(np.uint8)
+    num, labels = cv2.connectedComponents(skbin, connectivity=8)
+    loop_debug_edges = []
+    loop_nodes = []
+    loop_edges = []
+    for lbl in range(1, num):
+        ys, xs = np.where(labels == lbl)
+        if len(xs) < min_pixels:
+            continue
+        deges = deg[ys, xs]
+        if np.all(deges == 2):
+            comp_mask = (labels == lbl).astype(np.uint8)
+            cycle_pts = trace_cycle_in_component(comp_mask)
+            if len(cycle_pts) < 4:
+                continue
+            rect = robust_rectangle_from_cycle(cycle_pts, trim=trim)
+            if rect is None:
+                continue
+            # For debug: show traced cycle as a poly
+            loop_debug_edges.append({'u': -1, 'v': -1, 'poly': cycle_pts})
+            # Create 4 nodes (corners) and 4 edges
+            base = len(loop_nodes)
+            loop_nodes.extend(rect)
+            edges_idx = [(0,1),(1,2),(2,3),(3,0)]
+            for a, b in edges_idx:
+                pa = loop_nodes[base + a]
+                pb = loop_nodes[base + b]
+                loop_edges.append({'u': base + a, 'v': base + b, 'poly': [pa, pb]})
+    return loop_debug_edges, loop_nodes, loop_edges
+
+# -----------------------------
+# Main pipeline
+# -----------------------------
+def ideal_manhattan_nets_with_loops(binary_mask,
+                                    search_halfwin=2,
+                                    loop_min_pixels=24,
+                                    loop_trim=0.10,
+                                    visualize=True):
+    """
+    Input: binary 0/255 mask.
+    Output: perfect, tight Manhattan nets with squared junctions and
+            rectangles recovered for pure ladder-like loops.
+    """
+    assert binary_mask.ndim == 2
+    skel = skeletonize(img_as_bool(binary_mask > 0))
+    skel_u8 = (skel.astype(np.uint8)) * 255
+
+    # 1) Graph (non-loop) extraction
+    nodes_xy, edges, dbg_paths_nonloops, deg = extract_graph_edges(skel_u8)
+
+    # 2) Detect & rectangularize pure loops
+    loop_dbg_edges, loop_corner_nodes, loop_rect_edges = detect_and_rectify_loops(
+        skel_u8, deg, min_pixels=loop_min_pixels, trim=loop_trim
+    )
+
+    # 3) Distance map for non-loop edge routing
+    dt = distance_to_skeleton(skel_u8)
+
+    # 4) For non-loop edges: choose HV/VH by distance
+    ortho_edges = []
+    for e in edges:
+        u, v = e['u'], e['v']
+        p0 = nodes_xy[u]
+        p1 = nodes_xy[v]
+        poly = best_rect_route_for_edge(dt, p0, p1, search_halfwin=search_halfwin)
+        ortho_edges.append({'u': u, 'v': v, 'poly': poly})
+
+    # 5) Combine nodes: original nodes + loop corner nodes (with offset)
+    nodes_all = list(nodes_xy)
+    loop_offset = len(nodes_all)
+    nodes_all.extend(loop_corner_nodes)
+
+    # 6) Offset loop edges' node ids and combine with ortho edges
+    loop_edges_offset = []
+    for le in loop_rect_edges:
+        loop_edges_offset.append({
+            'u': le['u'] + loop_offset,
+            'v': le['v'] + loop_offset,
+            'poly': le['poly']
+        })
+    combined_edges = ortho_edges + loop_edges_offset
+
+    # 7) Square all junctions (loops are already axis-aligned; this just aligns anchors)
+    anchors, squared_edges = normalize_junction_anchors(nodes_all, combined_edges)
+
+    if visualize:
+        h, w = binary_mask.shape
+        # raw path viz (non-loops) + traced loop polylines
+        dbg_paths = draw_polys((h, w), [{'u':e['u'], 'v':e['v'], 'poly':e['poly']} for e in edges],
+                               color=(0,255,255), thickness=1)
+        if loop_dbg_edges:
+            loops_vis = draw_polys((h, w), loop_dbg_edges, color=(0,255,255), thickness=1)
+            dbg_paths = cv2.addWeighted(dbg_paths, 1.0, loops_vis, 1.0, 0.0)
+
+        dbg_ortho = draw_polys((h, w), ortho_edges + loop_edges_offset, color=(0,255,255), thickness=1)
+        dbg_final = draw_polys((h, w), squared_edges, color=(0,255,255), thickness=1)
+        return {
+            'nodes': anchors,
+            'edges': squared_edges,
+            'skel': skel_u8,
+            'dbg_paths': dbg_paths,
+            'dbg_ortho': dbg_ortho,
+            'dbg_final': dbg_final
+        }
+
+    return {'nodes': anchors, 'edges': squared_edges}
+
+
+
+def overlay_skeleton_and_final(skel_u8, final_edges,
+                               skel_color=(160,160,160),   # light gray
+                               final_color=(0,255,255),    # yellow/cyan-ish
+                               thickness=2):
+    """Draw skeleton + final orthogonal edges on one canvas."""
+    h, w = skel_u8.shape
+    canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    # paint skeleton
+    canvas[skel_u8 > 0] = skel_color
+    # draw final edges
+    for e in final_edges:
+        pts = e['poly']
+        for i in range(len(pts) - 1):
+            cv2.line(canvas, pts[i], pts[i+1], final_color, thickness, lineType=cv2.LINE_AA)
+    return canvas
+
+def overlay_skeleton_and_final_oriented(skel_u8, final_edges,
+                                        skel_color=(120,120,120),
+                                        color_h=(0,255,0),       # green for horizontal
+                                        color_v=(255,0,0),       # red for vertical
+                                        thickness=2):
+    """Same as above but colors H and V differently."""
+    h, w = skel_u8.shape
+    canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    canvas[skel_u8 > 0] = skel_color
+    for e in final_edges:
+        pts = e['poly']
+        for i in range(len(pts) - 1):
+            p, q = pts[i], pts[i+1]
+            col = color_h if p[1] == q[1] else color_v
+            cv2.line(canvas, p, q, col, thickness, lineType=cv2.LINE_AA)
+    return canvas
+
+
+# Example usage
+# -----------------------------
+if __name__ == "__main__":
+    # Update to your mask path
+    image_path = r"C:\Users\santo\Downloads\Test_140_M0_sample_1.png"
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise FileNotFoundError("Update image_path to a valid PNG.")
+
+    # Ensure binary
+    if img.max() > 1:
+        _, bin_mask = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    else:
+        bin_mask = (img > 0).astype(np.uint8) * 255
+
+    out = ideal_manhattan_nets_with_loops(
+        bin_mask,
+        search_halfwin=2,     # small wiggle to hug the skeleton
+        loop_min_pixels=24,   # ignore tiny noisy loops (< perimeter ~24 px)
+        loop_trim=0.10,       # robust side estimation (10% trimmed medians)
+        visualize=True
+    )
+    
+    overlay = overlay_skeleton_and_final(out['skel'], out['edges'],
+                                     skel_color=(120,120,120),
+                                     final_color=(0,255,255),
+                                     thickness=1)
+    cv2.imshow("Overlay (Skeleton + Final)", overlay)
+    overlay_oriented = overlay_skeleton_and_final_oriented(out['skel'], out['edges'],
+                                                       skel_color=(90,90,90),
+                                                       color_h=(0,255,0),
+                                                       color_v=(255,0,0),
+                                                       thickness=1)
+    cv2.imshow("Overlay (H green, V red)", overlay_oriented)
+
+#     print(f"Nodes: {len(out['nodes'])}  |  Edges: {len(out['edges'])}")
+#     cv2.imshow("Skeleton", out['skel'])
+#     cv2.imshow("Traced paths (non-loops) + traced loops", out['dbg_paths'])
+#     cv2.imshow("Orthogonal routes + rectangles", out['dbg_ortho'])
+#     cv2.imshow("FINAL Manhattan nets (squared, loops kept as rectangles)", out['dbg_final'])
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
