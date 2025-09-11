@@ -63,4 +63,55 @@ for off in OFFSETS:
 
 print("Total previews written:", found)
 if found == 0:
-    print("No plausible raw layouts found: likely compressed/proprietary tiles.")
+    print("No plausible raw layouts found: likely compressed
+/proprietary tiles.")
+
+
+# save as scan_embedded_magic.py
+import re, os, zlib
+
+fn = "M0.h00"
+data = open(fn, "rb").read()
+print("File bytes:", len(data))
+
+# Common magics
+sigs = {
+    b"\x89PNG\r\n\x1a\n": "png",
+    b"\xff\xd8\xff":      "jpg",
+    b"II*\x00":           "tiff_le",
+    b"MM\x00*":           "tiff_be",
+    b"\x78\x9C":          "zlib_78_9C",   # deflate
+    b"\x78\xDA":          "zlib_78_DA",
+}
+
+hits = []
+for sig, name in sigs.items():
+    for m in re.finditer(re.escape(sig), data):
+        hits.append((m.start(), name))
+hits.sort()
+
+print("Found", len(hits), "signature hits:")
+for i,(pos,name) in enumerate(hits[:50]):
+    print(f"  {i:02d} @ {pos} -> {name}")
+
+# Try naive zlib extraction for first few zlib hits
+out_count = 0
+for pos, name in hits:
+    if name.startswith("zlib_"):
+        try:
+            decomp = zlib.decompress(data[pos:])
+            # save first chunk; may be raw image or container
+            out = f"extract_zlib_{pos}.bin"
+            with open(out, "wb") as f:
+                f.write(decomp)
+            print(" wrote", out, "(len:", len(decomp), ")")
+            out_count += 1
+            if out_count >= 3:
+                break
+        except Exception:
+            pass
+
+if out_count == 0:
+    print("No zlib chunks extracted (or not zlib-compressed).")
+
+
