@@ -1,0 +1,66 @@
+# save as advanced_probe_tile.py
+import os, numpy as np, cv2
+
+fn = "M0.h00"  # change if needed
+buf = open(fn, "rb").read()
+n   = len(buf)
+print("File:", fn, "bytes:", n)
+
+# Try many plausible widths (add more if needed)
+WIDTHS = [256, 320, 384, 400, 512, 640, 768, 800, 960, 1000, 1024,
+          1152, 1280, 1365, 1440, 1536, 1600, 1728, 1792, 1920, 2000,
+          2048, 2160, 2304, 2400, 2560, 3000, 3072, 3200, 3328, 3456,
+          3600, 3840, 4000, 4096, 4608, 4800, 5120, 6144, 8192]
+
+# Try small header offsets (tile headers often <= 4KB)
+OFFSETS = list(range(0, 4096+1, 16))
+
+def save_preview(arr, w, h, tag):
+    img8 = arr
+    if arr.dtype == np.uint16:
+        mx = int(arr.max()) or 1
+        img8 = (arr * (255.0 / mx)).astype(np.uint8)
+    out = f"preview_{tag}_{w}x{h}.png"
+    cv2.imwrite(out, img8)
+    print(" wrote", out)
+
+found = 0
+
+for off in OFFSETS:
+    rem = n - off
+    if rem <= 0:
+        continue
+
+    # 8-bit
+    arr8 = np.frombuffer(buf, np.uint8, count=rem, offset=off)
+    for w in WIDTHS:
+        if rem % w == 0:
+            h = rem // w
+            if 64 <= h <= 60000:
+                try:
+                    img = arr8.reshape(h, w)
+                except ValueError:
+                    continue
+                # quick sanity: not all constant
+                if img.std() > 0:
+                    save_preview(img, w, h, f"8u_off{off}")
+                    found += 1
+
+    # 16-bit (little-endian)
+    if rem % 2 == 0:
+        arr16 = np.frombuffer(buf, np.uint16, count=rem//2, offset=off)
+        for w in WIDTHS:
+            if (rem//2) % w == 0:
+                h = (rem//2) // w
+                if 64 <= h <= 60000:
+                    try:
+                        img = arr16.reshape(h, w)
+                    except ValueError:
+                        continue
+                    if img.std() > 0:
+                        save_preview(img, w, h, f"16u_off{off}")
+                        found += 1
+
+print("Total previews written:", found)
+if found == 0:
+    print("No plausible raw layouts found: likely compressed/proprietary tiles.")
