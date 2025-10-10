@@ -3688,3 +3688,72 @@ for i in range(N):
     axes[i,1].imshow(val_msks[i,0].numpy(), cmap='gray'); axes[i,1].set_title("Mask (GT)"); axes[i,1].axis('off')
     axes[i,2].imshow(preds[i,0].numpy(),   cmap='gray'); axes[i,2].set_title("Pred"); axes[i,2].axis('off')
 plt.tight_layout(); plt.show()
+
+
+
+---------------------------------------------------------------------------
+RuntimeError                              Traceback (most recent call last)
+Cell In[2], line 481
+    479 print("Starting training...")
+    480 for epoch in range(NUM_EPOCHS):
+--> 481     tr_loss, tr_iou = train_one_epoch(model, train_loader, device)
+    482     val_loss, val_iou = validate(model, val_loader, device)
+    483     scheduler.step(val_loss)
+
+Cell In[2], line 457, in train_one_epoch(model, loader, device)
+    455 with autocast_ctx(MIXED_PRECISION):
+    456     logits = model(images)
+--> 457     loss   = criterion(logits, masks)
+    458 scaler.scale(loss).backward()
+    459 scaler.step(optimizer); scaler.update()
+
+File ~/deg_sp/lib/python3.10/site-packages/torch/nn/modules/module.py:1518, in Module._wrapped_call_impl(self, *args, **kwargs)
+   1516     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
+   1517 else:
+-> 1518     return self._call_impl(*args, **kwargs)
+
+File ~/deg_sp/lib/python3.10/site-packages/torch/nn/modules/module.py:1527, in Module._call_impl(self, *args, **kwargs)
+   1522 # If we don't have any hooks, we want to skip the rest of the logic in
+   1523 # this function, and just call forward.
+   1524 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
+   1525         or _global_backward_pre_hooks or _global_backward_hooks
+   1526         or _global_forward_hooks or _global_forward_pre_hooks):
+-> 1527     return forward_call(*args, **kwargs)
+   1529 try:
+   1530     result = None
+
+Cell In[2], line 399, in TotalLoss.forward(self, logits, targets)
+    398 def forward(self, logits, targets):
+--> 399     return self.base(logits, targets) + self.edge_w * self.edge(logits, targets)
+
+File ~/deg_sp/lib/python3.10/site-packages/torch/nn/modules/module.py:1518, in Module._wrapped_call_impl(self, *args, **kwargs)
+   1516     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
+   1517 else:
+-> 1518     return self._call_impl(*args, **kwargs)
+
+File ~/deg_sp/lib/python3.10/site-packages/torch/nn/modules/module.py:1527, in Module._call_impl(self, *args, **kwargs)
+   1522 # If we don't have any hooks, we want to skip the rest of the logic in
+   1523 # this function, and just call forward.
+   1524 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
+   1525         or _global_backward_pre_hooks or _global_backward_hooks
+   1526         or _global_forward_hooks or _global_forward_pre_hooks):
+-> 1527     return forward_call(*args, **kwargs)
+   1529 try:
+   1530     result = None
+
+Cell In[2], line 389, in EdgeConsistencyLoss.forward(self, logits, targets)
+    387 p_edge = (px.abs() + py.abs()).clamp_(0,1)
+    388 t_edge = (tx.abs() + ty.abs()).clamp_(0,1)
+--> 389 loss = F.binary_cross_entropy(p_edge, t_edge, reduction='none')
+    390 return loss.mean() if self.reduction=='mean' else (loss.sum() if self.reduction=='sum' else loss)
+
+File ~/deg_sp/lib/python3.10/site-packages/torch/nn/functional.py:3122, in binary_cross_entropy(input, target, weight, size_average, reduce, reduction)
+   3119     new_size = _infer_size(target.size(), weight.size())
+   3120     weight = weight.expand(new_size)
+-> 3122 return torch._C._nn.binary_cross_entropy(input, target, weight, reduction_enum)
+
+RuntimeError: torch.nn.functional.binary_cross_entropy and torch.nn.BCELoss are unsafe to autocast.
+Many models use a sigmoid layer right before the binary cross entropy layer.
+In this case, combine the two layers using torch.nn.functional.binary_cross_entropy_with_logits
+or torch.nn.BCEWithLogitsLoss.  binary_cross_entropy_with_logits and BCEWithLogits are
+safe to autocast.
