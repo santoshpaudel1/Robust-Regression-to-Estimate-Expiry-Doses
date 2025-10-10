@@ -2113,3 +2113,91 @@ for i in range(N):
     axes[i,2].imshow(preds[i,0].numpy(), cmap='gray'); axes[i,2].set_title("Pred");  axes[i,2].axis('off')
 plt.tight_layout(); plt.show()
 
+
+
+########################################error: #########################################
+
+RuntimeError                              Traceback (most recent call last)
+Cell In[10], line 506
+    504 for epoch in range(NUM_EPOCHS):
+    505     tr_loss = train_one_epoch(model, train_loader, device)
+--> 506     val_loss, val_iou = validate(model, val_loader, device)
+    507     scheduler.step(val_loss)
+    509     print(f"Epoch {epoch+1}/{NUM_EPOCHS} | "
+    510           f"Train: {tr_loss:.4f} | Val: {val_loss:.4f} | "
+    511           f"Val IoU: {val_iou:.4f} | LR: {optimizer.param_groups[0]['lr']:.2e}")
+
+File ~/deg_sp/lib/python3.10/site-packages/torch/utils/_contextlib.py:115, in context_decorator.<locals>.decorate_context(*args, **kwargs)
+    112 @functools.wraps(func)
+    113 def decorate_context(*args, **kwargs):
+    114     with ctx_factory():
+--> 115         return func(*args, **kwargs)
+
+Cell In[10], line 490, in validate(model, loader, device)
+    483 masks  = masks.to(device, non_blocking=True)
+    484 with torch.autocast(
+    485     device_type='cuda',
+    486     dtype=(torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16),
+    487     enabled=torch.cuda.is_available() and MIXED_PRECISION
+    488 ):
+    489     # --- NEW: TTA prediction ---
+--> 490     logits = predict_with_tta(model, images, tta_scales=TTA_SCALES)
+    492 loss = total_loss_fn(logits, masks)
+    493 val_loss += loss.item() * images.size(0)
+
+File ~/deg_sp/lib/python3.10/site-packages/torch/utils/_contextlib.py:115, in context_decorator.<locals>.decorate_context(*args, **kwargs)
+    112 @functools.wraps(func)
+    113 def decorate_context(*args, **kwargs):
+    114     with ctx_factory():
+--> 115         return func(*args, **kwargs)
+
+Cell In[10], line 436, in predict_with_tta(model, images, tta_scales)
+    433     mode = 'bicubic' if s > 1.0 else 'area'
+    434     im_s = F.interpolate(images, scale_factor=s, mode=mode,
+    435                          align_corners=False if mode!='area' else None)
+--> 436 logits_s = model(im_s)
+    437 logits = F.interpolate(logits_s, size=(H,W), mode='bicubic', align_corners=False)
+    438 acc += logits.float()
+
+File ~/deg_sp/lib/python3.10/site-packages/torch/nn/modules/module.py:1518, in Module._wrapped_call_impl(self, *args, **kwargs)
+   1516     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
+   1517 else:
+-> 1518     return self._call_impl(*args, **kwargs)
+
+File ~/deg_sp/lib/python3.10/site-packages/torch/nn/modules/module.py:1527, in Module._call_impl(self, *args, **kwargs)
+   1522 # If we don't have any hooks, we want to skip the rest of the logic in
+   1523 # this function, and just call forward.
+   1524 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
+   1525         or _global_backward_pre_hooks or _global_backward_hooks
+   1526         or _global_forward_hooks or _global_forward_pre_hooks):
+-> 1527     return forward_call(*args, **kwargs)
+   1529 try:
+   1530     result = None
+
+File ~/deg_sp/lib/python3.10/site-packages/segmentation_models_pytorch/base/model.py:64, in SegmentationModel.forward(self, x)
+     59 """Sequentially pass `x` trough model`s encoder, decoder and heads"""
+     61 if not (
+     62     torch.jit.is_scripting() or torch.jit.is_tracing() or is_torch_compiling()
+     63 ):
+---> 64     self.check_input_shape(x)
+     66 features = self.encoder(x)
+     67 decoder_output = self.decoder(features)
+
+File ~/deg_sp/lib/python3.10/site-packages/segmentation_models_pytorch/base/model.py:53, in SegmentationModel.check_input_shape(self, x)
+     43 new_h = (
+     44     (h // output_stride + 1) * output_stride
+     45     if h % output_stride != 0
+     46     else h
+     47 )
+     48 new_w = (
+     49     (w // output_stride + 1) * output_stride
+     50     if w % output_stride != 0
+     51     else w
+     52 )
+---> 53 raise RuntimeError(
+     54     f"Wrong input shape height={h}, width={w}. Expected image height and width "
+     55     f"divisible by {output_stride}. Consider pad your images to shape ({new_h}, {new_w})."
+     56 )
+
+RuntimeError: Wrong input shape height=281, width=281. Expected image height and width divisible by 32. Consider pad your images to shape (288, 288).
+
