@@ -3173,14 +3173,19 @@ plt.tight_layout(); plt.show()
 
 ############################## automatic selection of decode ############
 
-# ========================= SEM IC Thin-Line Segmentation (Auto-pick, Unet++ compatible) =========================
-# - Pre-upscale for compact inputs (fix -3% zoom)
-# - Anti-aliased resize
+
+
+
+
+
+# ========================= SEM IC Thin-Line Segmentation (Auto-pick + AMP-safe edge loss) =========================
+# - Pre-upscale for compact inputs (-3% zoom) before val/test resize
+# - Anti-aliased resize (LANCZOS/BICUBIC)
 # - Scale-TTA with stride-safe pad→model→unpad
-# - Unet++ with auto-picked encoder (excludes mit_b*, which Unet++ does not support)
-# - Optional: switch to Unet if you want to use mit_b* encoders
-# - EdgeConsistencyLoss (+ FocalDice) to keep 1–2 px lines separated
-# ===============================================================================================================
+# - Unet++ (default) with auto-picked compatible encoder (excludes mit_b*)
+# - Optional Unet (supports mit_b*) if you want SegFormer encoders
+# - EdgeConsistencyLoss fixed for AMP: BCE computed outside autocast (fp32)
+# ==================================================================================================================
 
 import os, io, gc, re, random
 from pathlib import Path
@@ -3447,17 +3452,14 @@ class MetalUNet(nn.Module):
         self.net = smp.Unet(
             encoder_name=encoder_name, encoder_weights=encoder_weights,
             in_channels=in_channels, classes=classes,
-            decoder_use_batchnorm=True,  # default
+            decoder_use_batchnorm=True,
             decoder_channels=decoder_channels,
             decoder_attention_type=decoder_attention_type, activation=None
         )
     def forward(self, x): return self.net(x)
 
 def pick_best_encoder_for_unetpp():
-    """
-    Return first available encoder that is known to work with Unet++.
-    Excludes 'mit_b*' which Unet++ does not support.
-    """
+    """Return first available encoder known to work with Unet++ (exclude mit_b*)."""
     preferred = [
         "timm-convnext_base",
         "timm-efficientnet-b4",
@@ -3472,17 +3474,13 @@ def pick_best_encoder_for_unetpp():
     for name in preferred:
         if name in available and not name.startswith("mit_b"):
             return name
-    # fallback: first available that is not mit_b*
     for name in available:
         if not name.startswith("mit_b"):
             return name
     return None
 
 def pick_best_encoder_for_unet():
-    """
-    Return first available encoder for Unet (Unet supports mit_b*).
-    Prefer detail-preserving options first.
-    """
+    """Return first available encoder for Unet (Unet supports mit_b*)."""
     preferred = [
         "mit_b4", "mit_b3",
         "timm-convnext_base",
@@ -3528,7 +3526,7 @@ else:
 n_params = sum(p.numel() for p in model.parameters())/1e6
 print(f"Model: {DECODER} | Encoder: {ENCODER_NAME} | Params: {n_params:.2f}M")
 
-# ========================= Losses: FocalDice + EdgeConsistency =========================
+# ========================= Losses (AMP-safe edge loss) =========================
 class FocalDiceLoss(nn.Module):
     def __init__(self, alpha=0.8, gamma=2.0, smooth=1e-6):
         super().__init__()
@@ -3545,24 +3543,49 @@ class FocalDiceLoss(nn.Module):
         return focal + dice
 
 class EdgeConsistencyLoss(nn.Module):
-    """Match Sobel edges of prediction and target to keep thin lines separated."""
+    """
+    Match Sobel edges of prediction and target (AMP-safe).
+    BCE is computed outside autocast in float32 to avoid AMP errors.
+    """
     def __init__(self, reduction='mean'):
         super().__init__()
         self.reduction = reduction
         kx = torch.tensor([[ 1, 0,-1],[ 2, 0,-2],[ 1, 0,-1]], dtype=torch.float32).view(1,1,3,3)
         ky = torch.tensor([[ 1, 2, 1],[ 0, 0, 0],[-1,-2,-1]], dtype=torch.float32).view(1,1,3,3)
         self.register_buffer('kx', kx); self.register_buffer('ky', ky)
+
     def forward(self, logits, targets):
         probs = torch.sigmoid(logits)
         t = targets.float()
+
+        # match dtype/device under AMP
         kx = self.kx.to(device=probs.device, dtype=probs.dtype)
         ky = self.ky.to(device=probs.device, dtype=probs.dtype)
-        px = F.conv2d(probs, kx, padding=1); py = F.conv2d(probs, ky, padding=1)
-        tx = F.conv2d(t,     kx, padding=1); ty = F.conv2d(t,     ky, padding=1)
-        p_edge = (px.abs() + py.abs()).clamp_(0,1)
-        t_edge = (tx.abs() + ty.abs()).clamp_(0,1)
-        loss = F.binary_cross_entropy(p_edge, t_edge, reduction='none')
-        return loss.mean() if self.reduction=='mean' else (loss.sum() if self.reduction=='sum' else loss)
+
+        px = F.conv2d(probs, kx, padding=1)
+        py = F.conv2d(probs, ky, padding=1)
+        tx = F.conv2d(t,     kx, padding=1)
+        ty = F.conv2d(t,     ky, padding=1)
+
+        p_edge = (px.abs() + py.abs()).clamp(0, 1)
+        t_edge = (tx.abs() + ty.abs()).clamp(0, 1)
+
+        # Compute BCE in fp32 OUTSIDE autocast (AMP-safe)
+        with torch.cuda.amp.autocast(enabled=False):
+            loss = F.binary_cross_entropy(
+                p_edge.float(),   # cast to float32
+                t_edge.float(),   # cast to float32
+                reduction='none'
+            )
+            # If you prefer smoother gradients, try L1 instead of BCE:
+            # loss = F.l1_loss(p_edge.float(), t_edge.float(), reduction='none')
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
 
 class TotalLoss(nn.Module):
     def __init__(self, base_loss, edge_w: float = 0.25):
@@ -3609,7 +3632,7 @@ def predict_with_tta(model, images, tta_scales=TTA_SCALES, stride=32):
         acc += logits_native.float()
     return acc / float(len(tta_scales))
 
-# ========================= Optim, scaler =========================
+# ========================= Build model, optim, scaler =========================
 criterion = TotalLoss(FocalDiceLoss(alpha=0.8, gamma=2.0, smooth=1e-6), edge_w=0.25)
 optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
@@ -3688,72 +3711,3 @@ for i in range(N):
     axes[i,1].imshow(val_msks[i,0].numpy(), cmap='gray'); axes[i,1].set_title("Mask (GT)"); axes[i,1].axis('off')
     axes[i,2].imshow(preds[i,0].numpy(),   cmap='gray'); axes[i,2].set_title("Pred"); axes[i,2].axis('off')
 plt.tight_layout(); plt.show()
-
-
-
----------------------------------------------------------------------------
-RuntimeError                              Traceback (most recent call last)
-Cell In[2], line 481
-    479 print("Starting training...")
-    480 for epoch in range(NUM_EPOCHS):
---> 481     tr_loss, tr_iou = train_one_epoch(model, train_loader, device)
-    482     val_loss, val_iou = validate(model, val_loader, device)
-    483     scheduler.step(val_loss)
-
-Cell In[2], line 457, in train_one_epoch(model, loader, device)
-    455 with autocast_ctx(MIXED_PRECISION):
-    456     logits = model(images)
---> 457     loss   = criterion(logits, masks)
-    458 scaler.scale(loss).backward()
-    459 scaler.step(optimizer); scaler.update()
-
-File ~/deg_sp/lib/python3.10/site-packages/torch/nn/modules/module.py:1518, in Module._wrapped_call_impl(self, *args, **kwargs)
-   1516     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
-   1517 else:
--> 1518     return self._call_impl(*args, **kwargs)
-
-File ~/deg_sp/lib/python3.10/site-packages/torch/nn/modules/module.py:1527, in Module._call_impl(self, *args, **kwargs)
-   1522 # If we don't have any hooks, we want to skip the rest of the logic in
-   1523 # this function, and just call forward.
-   1524 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
-   1525         or _global_backward_pre_hooks or _global_backward_hooks
-   1526         or _global_forward_hooks or _global_forward_pre_hooks):
--> 1527     return forward_call(*args, **kwargs)
-   1529 try:
-   1530     result = None
-
-Cell In[2], line 399, in TotalLoss.forward(self, logits, targets)
-    398 def forward(self, logits, targets):
---> 399     return self.base(logits, targets) + self.edge_w * self.edge(logits, targets)
-
-File ~/deg_sp/lib/python3.10/site-packages/torch/nn/modules/module.py:1518, in Module._wrapped_call_impl(self, *args, **kwargs)
-   1516     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
-   1517 else:
--> 1518     return self._call_impl(*args, **kwargs)
-
-File ~/deg_sp/lib/python3.10/site-packages/torch/nn/modules/module.py:1527, in Module._call_impl(self, *args, **kwargs)
-   1522 # If we don't have any hooks, we want to skip the rest of the logic in
-   1523 # this function, and just call forward.
-   1524 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
-   1525         or _global_backward_pre_hooks or _global_backward_hooks
-   1526         or _global_forward_hooks or _global_forward_pre_hooks):
--> 1527     return forward_call(*args, **kwargs)
-   1529 try:
-   1530     result = None
-
-Cell In[2], line 389, in EdgeConsistencyLoss.forward(self, logits, targets)
-    387 p_edge = (px.abs() + py.abs()).clamp_(0,1)
-    388 t_edge = (tx.abs() + ty.abs()).clamp_(0,1)
---> 389 loss = F.binary_cross_entropy(p_edge, t_edge, reduction='none')
-    390 return loss.mean() if self.reduction=='mean' else (loss.sum() if self.reduction=='sum' else loss)
-
-File ~/deg_sp/lib/python3.10/site-packages/torch/nn/functional.py:3122, in binary_cross_entropy(input, target, weight, size_average, reduce, reduction)
-   3119     new_size = _infer_size(target.size(), weight.size())
-   3120     weight = weight.expand(new_size)
--> 3122 return torch._C._nn.binary_cross_entropy(input, target, weight, reduction_enum)
-
-RuntimeError: torch.nn.functional.binary_cross_entropy and torch.nn.BCELoss are unsafe to autocast.
-Many models use a sigmoid layer right before the binary cross entropy layer.
-In this case, combine the two layers using torch.nn.functional.binary_cross_entropy_with_logits
-or torch.nn.BCEWithLogitsLoss.  binary_cross_entropy_with_logits and BCEWithLogits are
-safe to autocast.
