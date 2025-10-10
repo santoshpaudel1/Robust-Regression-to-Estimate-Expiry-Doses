@@ -3643,4 +3643,45 @@ plt.tight_layout(); plt.show()
 
 
 
-pip install -U segmentation-models-pytorch timm
+--------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+Cell In[9], line 294
+    291     raise RuntimeError("No encoders found in segmentation_models_pytorch.encoders.")
+    292 print("Using encoder:", ENCODER_NAME)
+--> 294 model = MetalUNetPP(
+    295     encoder_name=ENCODER_NAME,
+    296     encoder_weights='imagenet',
+    297     in_channels=1, classes=1,
+    298     decoder_channels=(256,128,64,32,16),
+    299     decoder_attention_type=None
+    300 ).to(device)
+    302 n_params = sum(p.numel() for p in model.parameters())/1e6
+    303 print(f"Model params: {n_params:.2f}M")
+
+Cell In[9], line 264, in MetalUNetPP.__init__(self, encoder_name, encoder_weights, in_channels, classes, decoder_channels, decoder_attention_type)
+    261 def __init__(self, encoder_name='mit_b3', encoder_weights='imagenet',
+    262              in_channels=1, classes=1, decoder_channels=(256,128,64,32,16), decoder_attention_type=None):
+    263     super().__init__()
+--> 264     self.net = smp.UnetPlusPlus(
+    265         encoder_name=encoder_name, encoder_weights=encoder_weights,
+    266         in_channels=in_channels, classes=classes,
+    267         decoder_channels=decoder_channels,
+    268         decoder_attention_type=decoder_attention_type, activation=None
+    269     )
+
+File ~/deg_sp/lib/python3.10/site-packages/segmentation_models_pytorch/base/hub_mixin.py:153, in supports_config_loading.<locals>.wrapper(self, *args, **kwargs)
+    150 @wraps(func)
+    151 def wrapper(self, *args, **kwargs):
+    152     kwargs = {k: v for k, v in kwargs.items() if not k.startswith("_")}
+--> 153     return func(self, *args, **kwargs)
+
+File ~/deg_sp/lib/python3.10/site-packages/segmentation_models_pytorch/decoders/unetplusplus/model.py:95, in UnetPlusPlus.__init__(self, encoder_name, encoder_depth, encoder_weights, decoder_use_norm, decoder_channels, decoder_attention_type, decoder_interpolation, in_channels, classes, activation, aux_params, **kwargs)
+     92 super().__init__()
+     94 if encoder_name.startswith("mit_b"):
+---> 95     raise ValueError(
+     96         "UnetPlusPlus is not support encoder_name={}".format(encoder_name)
+     97     )
+     99 decoder_use_batchnorm = kwargs.pop("decoder_use_batchnorm", None)
+    100 if decoder_use_batchnorm is not None:
+
+ValueError: UnetPlusPlus is not support encoder_name=mit_b4
