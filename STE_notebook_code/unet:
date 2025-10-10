@@ -1568,11 +1568,9 @@ plt.tight_layout(); plt.show()
 
 
 ######################## updated 1rst ##########################################
-
-
-import os, io, gc, re, random
+import os, re, random
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
@@ -1588,19 +1586,17 @@ import matplotlib.pyplot as plt
 import torchvision
 import torchvision.transforms.functional as TF
 
-# Optional: OpenCV for CLAHE/motion blur (not strictly required)
+# Optional: OpenCV (only used if available)
 try:
     import cv2
     _HAS_CV2 = True
 except Exception:
     _HAS_CV2 = False
 
-# SMP (models)
+# Segmentation Models PyTorch
 try:
     import segmentation_models_pytorch as smp
-    _HAS_SMP = True
 except Exception as e:
-    _HAS_SMP = False
     raise ImportError("Please install segmentation-models-pytorch: pip install -U segmentation-models-pytorch timm") from e
 
 print("Torch:", torch.__version__, "| CUDA:", torch.cuda.is_available())
@@ -1608,6 +1604,7 @@ print("Torchvision:", torchvision.__version__)
 print("SMP:", smp.__version__)
 print("OpenCV:", _HAS_CV2)
 
+# -------------------- Repro/Perf --------------------
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
@@ -1617,14 +1614,13 @@ def set_seed(seed=42):
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Device:", device, "| CUDA bf16:", (torch.cuda.is_available() and torch.cuda.is_bf16_supported()))
 
-# Perf knobs
 if hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 torch.backends.cudnn.benchmark = True
 
-# ==== CONFIG ====
-PATCH_DIR = '/home/jupyter/new_training_reduced_reso/ptchs_3_percent'  # <-- UPDATE if needed
-MASK_DIR  = '/home/jupyter/new_training_reduced_reso/mask_3_percent'  # <-- UPDATE if needed
+# ==================== CONFIG ====================
+PATCH_DIR = '/home/jupyter/new_training_reduced_reso/ptchs_3_percent'   # <— update as needed
+MASK_DIR  = '/home/jupyter/new_training_reduced_reso/mask_3_percent'    # <— update as needed
 
 IMG_SIZE       = 256
 BATCH_SIZE     = 8
@@ -1638,14 +1634,14 @@ CHECKPOINT_PATH = "best_fpn_mitb3.pth"
 
 MIXED_PRECISION = True  # AMP (fp16/bf16)
 
-# --- NEW: pre-upscale for dense/compact test/val, and TTA scales ---
-PRE_UPSCALE_VAL = 1.10              # 1.08–1.15 usually works when 3% zoom fails
-TTA_SCALES      = (1.0, 1.10)       # add 0.95 if VRAM allows: (0.95, 1.0, 1.10)
+# Pre-upscale for compact (−3%) validation/test inputs and TTA scales
+PRE_UPSCALE_VAL = 1.10              # try 1.08–1.15 if parallels still merge
+TTA_SCALES      = (1.0, 1.10)       # can try (0.95, 1.0, 1.10) if VRAM allows
 
 set_seed(SEED)
 use_cuda = torch.cuda.is_available()
 
-# ---------------- helpers: pairing by numeric ID ----------------
+# -------------------- I/O helpers --------------------
 def list_images(root: str, exts=('.png', '.jpg', '.jpeg', '.tif', '.tiff')) -> List[str]:
     return [os.path.join(root, f) for f in os.listdir(root)
             if os.path.isfile(os.path.join(root, f)) and f.lower().endswith(exts)]
@@ -1672,29 +1668,17 @@ def load_data_paths_by_id(patch_dir: str, mask_dir: str,
     if not msk_files:
         raise FileNotFoundError(f"No mask files with {exts} found in {mask_dir}")
 
-    img_map = {}
+    img_map, msk_map = {}, {}
     for p in img_files:
-        kid = extract_id(Path(p).stem)
-        img_map.setdefault(kid, p)
-
-    msk_map = {}
+        img_map.setdefault(extract_id(Path(p).stem), p)
     for p in msk_files:
-        kid = extract_id(Path(p).stem)
-        msk_map.setdefault(kid, p)
+        msk_map.setdefault(extract_id(Path(p).stem), p)
 
     def sort_key(k):
         return (0, int(k)) if k.isdigit() else (1, k)
     keys = sorted(set(img_map) & set(msk_map), key=sort_key)
 
-    missing_imgs = sorted(set(msk_map) - set(img_map), key=sort_key)[:10]
-    missing_msks = sorted(set(img_map) - set(msk_map), key=sort_key)[:10]
-
     print(f"Found IDs -> images: {len(img_map)}, masks: {len(msk_map)}, paired: {len(keys)}")
-    if missing_imgs:
-        print("⚠️ IDs present in masks but missing in images (first 10):", missing_imgs)
-    if missing_msks:
-        print("⚠️ IDs present in images but missing in masks  (first 10):", missing_msks)
-
     if not keys:
         raise AssertionError("No matching IDs between images and masks. Check filename patterns.")
 
@@ -1702,7 +1686,6 @@ def load_data_paths_by_id(patch_dir: str, mask_dir: str,
     mask_paths  = [msk_map[k] for k in keys]
     return image_paths, mask_paths
 
-# ---------------- split helper ----------------
 def split_paths(image_paths: List[str], mask_paths: List[str],
                 val_ratio: float = 0.15, seed: int = 42, shuffle: bool = True):
     assert len(image_paths) == len(mask_paths), "Image/Mask count mismatch before split."
@@ -1720,7 +1703,7 @@ def split_paths(image_paths: List[str], mask_paths: List[str],
     y_val   = [mask_paths[i]  for i in val_idx]
     return X_train, X_val, y_train, y_val
 
-# ---------------- Anti-aliased resize helpers (NEW) ----------------
+# -------------------- AA resize helpers --------------------
 try:
     _BICUBIC  = Image.Resampling.BICUBIC
     _LANCZOS  = Image.Resampling.LANCZOS
@@ -1739,11 +1722,10 @@ def aa_resize(pil_img: Image.Image, size_hw: Tuple[int,int]) -> Image.Image:
     resample = _LANCZOS if (W < w0 or H < h0) else _BICUBIC
     return pil_img.resize((W, H), resample=resample)
 
-# ---------------- Thin-line friendly augment (UPDATED) ----------------
+# -------------------- Augment (thin-line friendly) --------------------
 class ThinLineTransform:
     """
-    Mild, SEM-friendly augmentations preserving thin metal lines.
-    Includes scale jitter (±8–12%) + anti-aliased resize to target.
+    Mild SEM-friendly augmentations w/ scale jitter (±8–12%) + AA resize.
     """
     def __init__(self, img_size=256):
         self.img_size = img_size
@@ -1756,15 +1738,9 @@ class ThinLineTransform:
         x8 = (np.clip(x,0,1)*255).astype(np.uint8)
         return Image.fromarray(x8, mode='L')
 
-    @staticmethod
-    def _to_np(p):
-        a = np.array(p, dtype=np.uint8).astype(np.float32)/255.0
-        if a.ndim == 3:
-            a = a[...,0]
-        return a
-
     def __call__(self, img_np, mask_np):
-        img = img_np[...,0]; msk = (mask_np[...,0] > 0.5).astype(np.float32)
+        img = img_np[...,0]
+        msk = (mask_np[...,0] > 0.5).astype(np.float32)
         I = self._to_pil(img)
         M = self._to_pil(msk)
 
@@ -1789,7 +1765,7 @@ class ThinLineTransform:
             M = TF.affine(M, angle=deg, translate=(int(tx*iw), int(ty*ih)),
                           scale=1.0, shear=(shx,shy), interpolation=TF.InterpolationMode.NEAREST)
 
-        # --- NEW: scale jitter (±8–12%) with AA ---
+        # scale jitter ±8–12% (AA)
         s = random.uniform(0.92, 1.12)
         new_w = max(1, int(I.size[0]*s)); new_h = max(1, int(I.size[1]*s))
         I = aa_resize(I, (new_w, new_h))
@@ -1815,7 +1791,7 @@ class ThinLineTransform:
         mask_t = (TF.to_tensor(M) > 0.5).float()  # (1,H,W)
         return img_t, mask_t
 
-# ---------------- Dataset (UPDATED with pre_upscale) ----------------
+# -------------------- Dataset (with pre_upscale) --------------------
 class ViaDataset(Dataset):
     def __init__(self, image_paths: List[str], mask_paths: List[str],
                  img_size: int = 256, augment: bool = False, pre_upscale: float = 1.0):
@@ -1834,14 +1810,14 @@ class ViaDataset(Dataset):
         img = Image.open(self.image_paths[idx]).convert('L')
         msk = Image.open(self.mask_paths[idx]).convert('L')
 
-        # --- NEW: pre-upscale for dense/compact val/test inputs ---
+        # pre-upscale only for non-aug (val/test)
         if not self.augment and self.pre_upscale != 1.0:
             new_w = max(1, int(img.size[0] * self.pre_upscale))
             new_h = max(1, int(img.size[1] * self.pre_upscale))
             img = aa_resize(img, (new_w, new_h))          # BICUBIC when enlarging
             msk = msk.resize((new_w, new_h), resample=_NEAREST)
 
-        # final AA resize to model input size
+        # final AA resize to model input
         img = aa_resize(img, (self.img_size, self.img_size))
         msk = msk.resize((self.img_size, self.img_size), resample=_NEAREST)
 
@@ -1855,7 +1831,7 @@ class ViaDataset(Dataset):
             msk_t  = torch.tensor(msk_np, dtype=torch.float32).permute(2,0,1)
             return img_t, msk_t
 
-# ========================= Run pairing, split, and build loaders =========================
+# -------------------- Build datasets/loaders --------------------
 image_paths, mask_paths = load_data_paths_by_id(PATCH_DIR, MASK_DIR)
 X_train, X_val, y_train, y_val = split_paths(image_paths, mask_paths, val_ratio=VAL_RATIO, seed=SEED, shuffle=True)
 
@@ -1866,11 +1842,9 @@ train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
                           pin_memory=use_cuda, num_workers=NUM_WORKERS, drop_last=False)
 val_loader   = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
                           pin_memory=use_cuda, num_workers=NUM_WORKERS, drop_last=False)
+print("Loaders ready:", f"train batches={len(train_loader)} | val batches={len(val_loader)}")
 
-print("Loaders ready:",
-      f"train batches={len(train_loader)} | val batches={len(val_loader)}")
-
-# ---------------- Losses (unchanged from your base, kept here) ----------------
+# -------------------- Losses --------------------
 def soft_skeletonize(x, iters=8):
     for _ in range(iters):
         minpool = -F.max_pool2d(-x, kernel_size=3, stride=1, padding=1)
@@ -1952,11 +1926,11 @@ def total_loss_fn(logits, targets):
         else:
             return l_comp
 
-# ---------------- Model ----------------
+# -------------------- Model --------------------
 try:
     model = smp.FPN(
         encoder_name='mit_b3',
-        encoder_weights='imagenet',
+        encoder_weights='imagenet',   # fall back below if unavailable
         in_channels=1,
         classes=1,
         activation=None
@@ -1974,7 +1948,6 @@ except Exception as e:
 n_params = sum(p.numel() for p in model.parameters())/1e6
 print(f"Model: FPN(mit_b3) | Params: {n_params:.2f}M")
 
-# Optimizer & scheduler
 optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
@@ -1988,26 +1961,63 @@ with torch.no_grad():
     out = model(dummy)
     print("Output shape:", tuple(out.shape))
 
-# ---------------- TTA inference (NEW) ----------------
+# -------------------- PAD/UNPAD HELPERS (stride-safe) --------------------
+def _next_multiple(x, m=32):
+    return (x + m - 1) // m * m
+
+def pad_to_stride(x: torch.Tensor, stride: int = 32, mode: str = "reflect"):
+    """
+    x: (B,C,H,W) -> returns (x_pad, pads) where pads=(top,bottom,left,right)
+    """
+    B, C, H, W = x.shape
+    Hn, Wn = _next_multiple(H, stride), _next_multiple(W, stride)
+    pad_h, pad_w = Hn - H, Wn - W
+    pads_f = (0, pad_w, 0, pad_h)  # (left,right,top,bottom) for F.pad
+    if pad_h == 0 and pad_w == 0:
+        return x, (0, 0, 0, 0)
+    x_pad = F.pad(x, pads_f, mode=mode)
+    return x_pad, (0, pad_h, 0, pad_w)
+
+def unpad(x: torch.Tensor, pads):
+    """
+    x: (B,C,H_pad,W_pad), pads=(top,bottom,left,right) -> crop back
+    """
+    t, b, l, r = pads
+    H_pad, W_pad = x.shape[-2:]
+    return x[..., t:H_pad - b if b > 0 else None, l:W_pad - r if r > 0 else None]
+
+# -------------------- TTA Inference (stride-safe) --------------------
 @torch.no_grad()
-def predict_with_tta(model, images, tta_scales=(1.0, 1.10)):
+def predict_with_tta(model, images, tta_scales=TTA_SCALES, stride=32):
     """
     images: (B,1,H,W) float32 [0,1]; returns averaged logits at native (H,W).
+    Pads to multiples of `stride` so SMP encoders are happy for arbitrary scales.
     """
     device = next(model.parameters()).device
     B, C, H, W = images.shape
     acc = torch.zeros((B,1,H,W), dtype=torch.float32, device=device)
 
     for s in tta_scales:
+        # scale
         if s == 1.0:
             im_s = images
         else:
             mode = 'bicubic' if s > 1.0 else 'area'
             im_s = F.interpolate(images, scale_factor=s, mode=mode,
-                                 align_corners=False if mode!='area' else None)
-        logits_s = model(im_s)
-        logits = F.interpolate(logits_s, size=(H,W), mode='bicubic', align_corners=False)
-        acc += logits.float()
+                                 align_corners=False if mode != 'area' else None)
+
+        # pad to stride
+        im_s_pad, pads = pad_to_stride(im_s, stride=stride, mode="reflect")
+
+        # forward
+        logits_s_pad = model(im_s_pad)
+
+        # unpad back to scaled size
+        logits_s = unpad(logits_s_pad, pads)
+
+        # resize back to native HxW
+        logits_native = F.interpolate(logits_s, size=(H, W), mode='bicubic', align_corners=False)
+        acc += logits_native.float()
 
     return acc / float(len(tta_scales))
 
@@ -2022,6 +2032,7 @@ def iou_from_logits(logits: torch.Tensor, targets: torch.Tensor,
     union = preds.sum(dims) + t.sum(dims) - inter
     return ((inter + eps) / (union + eps)).mean()
 
+# -------------------- Train/Eval Loops --------------------
 def train_one_epoch(model, loader, device):
     model.train()
     running = 0.0
@@ -2058,9 +2069,7 @@ def validate(model, loader, device):
             dtype=(torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16),
             enabled=torch.cuda.is_available() and MIXED_PRECISION
         ):
-            # --- NEW: TTA prediction ---
-            logits = predict_with_tta(model, images, tta_scales=TTA_SCALES)
-
+            logits = predict_with_tta(model, images, tta_scales=TTA_SCALES, stride=32)
         loss = total_loss_fn(logits, masks)
         val_loss += loss.item() * images.size(0)
         val_iou  += iou_from_logits(logits, masks, threshold=0.5).item() * images.size(0)
@@ -2068,7 +2077,7 @@ def validate(model, loader, device):
     n = len(loader.dataset)
     return val_loss / n, val_iou / n
 
-# ---------------- Train ----------------
+# -------------------- Run Training --------------------
 best_val = float('inf')
 best_iou = 0.0
 print("Starting training...")
@@ -2097,11 +2106,11 @@ for epoch in range(NUM_EPOCHS):
 
 print("Done. Best Val Loss:", f"{best_val:.4f}", "| Best Val IoU:", f"{best_iou:.4f}")
 
-# ---------------- Quick visual check ----------------
+# -------------------- Quick visual check --------------------
 model.eval()
 imgs, msks = next(iter(val_loader))
 with torch.no_grad():
-    logits = predict_with_tta(model, imgs.to(device), tta_scales=TTA_SCALES)
+    logits = predict_with_tta(model, imgs.to(device), tta_scales=TTA_SCALES, stride=32)
     probs  = torch.sigmoid(logits).cpu()
     preds  = (probs > 0.5).float()
 
@@ -2113,91 +2122,4 @@ for i in range(N):
     axes[i,2].imshow(preds[i,0].numpy(), cmap='gray'); axes[i,2].set_title("Pred");  axes[i,2].axis('off')
 plt.tight_layout(); plt.show()
 
-
-
-########################################error: #########################################
-
-RuntimeError                              Traceback (most recent call last)
-Cell In[10], line 506
-    504 for epoch in range(NUM_EPOCHS):
-    505     tr_loss = train_one_epoch(model, train_loader, device)
---> 506     val_loss, val_iou = validate(model, val_loader, device)
-    507     scheduler.step(val_loss)
-    509     print(f"Epoch {epoch+1}/{NUM_EPOCHS} | "
-    510           f"Train: {tr_loss:.4f} | Val: {val_loss:.4f} | "
-    511           f"Val IoU: {val_iou:.4f} | LR: {optimizer.param_groups[0]['lr']:.2e}")
-
-File ~/deg_sp/lib/python3.10/site-packages/torch/utils/_contextlib.py:115, in context_decorator.<locals>.decorate_context(*args, **kwargs)
-    112 @functools.wraps(func)
-    113 def decorate_context(*args, **kwargs):
-    114     with ctx_factory():
---> 115         return func(*args, **kwargs)
-
-Cell In[10], line 490, in validate(model, loader, device)
-    483 masks  = masks.to(device, non_blocking=True)
-    484 with torch.autocast(
-    485     device_type='cuda',
-    486     dtype=(torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16),
-    487     enabled=torch.cuda.is_available() and MIXED_PRECISION
-    488 ):
-    489     # --- NEW: TTA prediction ---
---> 490     logits = predict_with_tta(model, images, tta_scales=TTA_SCALES)
-    492 loss = total_loss_fn(logits, masks)
-    493 val_loss += loss.item() * images.size(0)
-
-File ~/deg_sp/lib/python3.10/site-packages/torch/utils/_contextlib.py:115, in context_decorator.<locals>.decorate_context(*args, **kwargs)
-    112 @functools.wraps(func)
-    113 def decorate_context(*args, **kwargs):
-    114     with ctx_factory():
---> 115         return func(*args, **kwargs)
-
-Cell In[10], line 436, in predict_with_tta(model, images, tta_scales)
-    433     mode = 'bicubic' if s > 1.0 else 'area'
-    434     im_s = F.interpolate(images, scale_factor=s, mode=mode,
-    435                          align_corners=False if mode!='area' else None)
---> 436 logits_s = model(im_s)
-    437 logits = F.interpolate(logits_s, size=(H,W), mode='bicubic', align_corners=False)
-    438 acc += logits.float()
-
-File ~/deg_sp/lib/python3.10/site-packages/torch/nn/modules/module.py:1518, in Module._wrapped_call_impl(self, *args, **kwargs)
-   1516     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
-   1517 else:
--> 1518     return self._call_impl(*args, **kwargs)
-
-File ~/deg_sp/lib/python3.10/site-packages/torch/nn/modules/module.py:1527, in Module._call_impl(self, *args, **kwargs)
-   1522 # If we don't have any hooks, we want to skip the rest of the logic in
-   1523 # this function, and just call forward.
-   1524 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
-   1525         or _global_backward_pre_hooks or _global_backward_hooks
-   1526         or _global_forward_hooks or _global_forward_pre_hooks):
--> 1527     return forward_call(*args, **kwargs)
-   1529 try:
-   1530     result = None
-
-File ~/deg_sp/lib/python3.10/site-packages/segmentation_models_pytorch/base/model.py:64, in SegmentationModel.forward(self, x)
-     59 """Sequentially pass `x` trough model`s encoder, decoder and heads"""
-     61 if not (
-     62     torch.jit.is_scripting() or torch.jit.is_tracing() or is_torch_compiling()
-     63 ):
----> 64     self.check_input_shape(x)
-     66 features = self.encoder(x)
-     67 decoder_output = self.decoder(features)
-
-File ~/deg_sp/lib/python3.10/site-packages/segmentation_models_pytorch/base/model.py:53, in SegmentationModel.check_input_shape(self, x)
-     43 new_h = (
-     44     (h // output_stride + 1) * output_stride
-     45     if h % output_stride != 0
-     46     else h
-     47 )
-     48 new_w = (
-     49     (w // output_stride + 1) * output_stride
-     50     if w % output_stride != 0
-     51     else w
-     52 )
----> 53 raise RuntimeError(
-     54     f"Wrong input shape height={h}, width={w}. Expected image height and width "
-     55     f"divisible by {output_stride}. Consider pad your images to shape ({new_h}, {new_w})."
-     56 )
-
-RuntimeError: Wrong input shape height=281, width=281. Expected image height and width divisible by 32. Consider pad your images to shape (288, 288).
 
