@@ -3171,3 +3171,76 @@ for i in range(N):
 plt.tight_layout(); plt.show()
 
 
+
+------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+Cell In[3], line 376
+    373     return acc / float(len(tta_scales))
+    375 # ========================= Build model, optim, scaler =========================
+--> 376 model = build_unetpp_preset(PRESET, in_channels=1, classes=1).to(device)
+    377 n_params = sum(p.numel() for p in model.parameters())/1e6
+    378 print(f"Model: {PRESET} | Params: {n_params:.2f}M")
+
+Cell In[3], line 274, in build_unetpp_preset(preset, in_channels, classes)
+    272 preset = preset.lower()
+    273 if preset == "hrnet_w18":
+--> 274     return MetalUNetPP('timm-hrnet_w18','imagenet',in_channels,classes,(256,128,64,32,16),None)
+    275 elif preset == "hrnet_w32":
+    276     return MetalUNetPP('timm-hrnet_w32','imagenet',in_channels,classes,(256,128,64,32,16),None)
+
+Cell In[3], line 263, in MetalUNetPP.__init__(self, encoder_name, encoder_weights, in_channels, classes, decoder_channels, decoder_attention_type)
+    260 def __init__(self, encoder_name='timm-hrnet_w18', encoder_weights='imagenet',
+    261              in_channels=1, classes=1, decoder_channels=(256,128,64,32,16), decoder_attention_type=None):
+    262     super().__init__()
+--> 263     self.net = smp.UnetPlusPlus(
+    264         encoder_name=encoder_name, encoder_weights=encoder_weights,
+    265         in_channels=in_channels, classes=classes,
+    266         decoder_channels=decoder_channels,
+    267         decoder_attention_type=decoder_attention_type, activation=None
+    268     )
+
+File ~/deg_sp/lib/python3.10/site-packages/segmentation_models_pytorch/base/hub_mixin.py:153, in supports_config_loading.<locals>.wrapper(self, *args, **kwargs)
+    150 @wraps(func)
+    151 def wrapper(self, *args, **kwargs):
+    152     kwargs = {k: v for k, v in kwargs.items() if not k.startswith("_")}
+--> 153     return func(self, *args, **kwargs)
+
+File ~/deg_sp/lib/python3.10/site-packages/segmentation_models_pytorch/decoders/unetplusplus/model.py:108, in UnetPlusPlus.__init__(self, encoder_name, encoder_depth, encoder_weights, decoder_use_norm, decoder_channels, decoder_attention_type, decoder_interpolation, in_channels, classes, activation, aux_params, **kwargs)
+    101     warnings.warn(
+    102         "The usage of decoder_use_batchnorm is deprecated. Please modify your code for decoder_use_norm",
+    103         DeprecationWarning,
+    104         stacklevel=2,
+    105     )
+    106     decoder_use_norm = decoder_use_batchnorm
+--> 108 self.encoder = get_encoder(
+    109     encoder_name,
+    110     in_channels=in_channels,
+    111     depth=encoder_depth,
+    112     weights=encoder_weights,
+    113     **kwargs,
+    114 )
+    116 self.decoder = UnetPlusPlusDecoder(
+    117     encoder_channels=self.encoder.out_channels,
+    118     decoder_channels=decoder_channels,
+   (...)
+    123     interpolation_mode=decoder_interpolation,
+    124 )
+    126 self.segmentation_head = SegmentationHead(
+    127     in_channels=decoder_channels[-1],
+    128     out_channels=classes,
+    129     activation=activation,
+    130     kernel_size=3,
+    131 )
+
+File ~/deg_sp/lib/python3.10/site-packages/segmentation_models_pytorch/encoders/__init__.py:98, in get_encoder(name, in_channels, depth, weights, output_stride, **kwargs)
+     95     return encoder
+     97 if name not in encoders:
+---> 98     raise KeyError(
+     99         f"Wrong encoder name `{name}`, supported encoders: {list(encoders.keys())}"
+    100     )
+    102 params = copy.deepcopy(encoders[name]["params"])
+    103 params["depth"] = depth
+
+KeyError: "Wrong encoder name `timm-hrnet_w18`, supported encoders: ['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152', 'resnext50_32x4d', 'resnext101_32x4d', 'resnext101_32x8d', 'resnext101_32x16d', 'resnext101_32x32d', 'resnext101_32x48d', 'dpn68', 'dpn68b', 'dpn92', 'dpn98', 'dpn107', 'dpn131', 'vgg11', 'vgg11_bn', 'vgg13', 'vgg13_bn', 'vgg16', 'vgg16_bn', 'vgg19', 'vgg19_bn', 'senet154', 'se_resnet50', 'se_resnet101', 'se_resnet152', 'se_resnext50_32x4d', 'se_resnext101_32x4d', 'densenet121', 'densenet169', 'densenet201', 'densenet161', 'inceptionresnetv2', 'inceptionv4', 'efficientnet-b0', 'efficientnet-b1', 'efficientnet-b2', 'efficientnet-b3', 'efficientnet-b4', 'efficientnet-b5', 'efficientnet-b6', 'efficientnet-b7', 'mobilenet_v2', 'xception', 'timm-efficientnet-b0', 'timm-efficientnet-b1', 'timm-efficientnet-b2', 'timm-efficientnet-b3', 'timm-efficientnet-b4', 'timm-efficientnet-b5', 'timm-efficientnet-b6', 'timm-efficientnet-b7', 'timm-efficientnet-b8', 'timm-efficientnet-l2', 'timm-tf_efficientnet_lite0', 'timm-tf_efficientnet_lite1', 'timm-tf_efficientnet_lite2', 'timm-tf_efficientnet_lite3', 'timm-tf_efficientnet_lite4', 'timm-skresnet18', 'timm-skresnet34', 'timm-skresnext50_32x4d', 'mit_b0', 'mit_b1', 'mit_b2', 'mit_b3', 'mit_b4', 'mit_b5', 'mobileone_s0', 'mobileone_s1', 'mobileone_s2', 'mobileone_s3', 'mobileone_s4']"
+
+
