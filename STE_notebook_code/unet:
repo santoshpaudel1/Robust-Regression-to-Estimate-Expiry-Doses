@@ -1563,3 +1563,553 @@ for i in range(N):
     axes[i,1].imshow(val_msks[i,0].numpy(), cmap='gray'); axes[i,1].set_title("Mask (GT)"); axes[i,1].axis('off')
     axes[i,2].imshow(preds[i,0].numpy(),   cmap='gray'); axes[i,2].set_title("Pred"); axes[i,2].axis('off')
 plt.tight_layout(); plt.show()
+
+
+
+
+######################## updated 1rst ##########################################
+
+
+import os, io, gc, re, random
+from pathlib import Path
+from typing import List, Tuple, Optional
+
+import numpy as np
+from PIL import Image, ImageEnhance, ImageFilter
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+
+import matplotlib.pyplot as plt
+
+import torchvision
+import torchvision.transforms.functional as TF
+
+# Optional: OpenCV for CLAHE/motion blur (not strictly required)
+try:
+    import cv2
+    _HAS_CV2 = True
+except Exception:
+    _HAS_CV2 = False
+
+# SMP (models)
+try:
+    import segmentation_models_pytorch as smp
+    _HAS_SMP = True
+except Exception as e:
+    _HAS_SMP = False
+    raise ImportError("Please install segmentation-models-pytorch: pip install -U segmentation-models-pytorch timm") from e
+
+print("Torch:", torch.__version__, "| CUDA:", torch.cuda.is_available())
+print("Torchvision:", torchvision.__version__)
+print("SMP:", smp.__version__)
+print("OpenCV:", _HAS_CV2)
+
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Device:", device, "| CUDA bf16:", (torch.cuda.is_available() and torch.cuda.is_bf16_supported()))
+
+# Perf knobs
+if hasattr(torch, "set_float32_matmul_precision"):
+    torch.set_float32_matmul_precision("high")
+torch.backends.cudnn.benchmark = True
+
+# ==== CONFIG ====
+PATCH_DIR = '/home/jupyter/new_training_reduced_reso/ptchs_3_percent'  # <-- UPDATE if needed
+MASK_DIR  = '/home/jupyter/new_training_reduced_reso/mask_3_percent'  # <-- UPDATE if needed
+
+IMG_SIZE       = 256
+BATCH_SIZE     = 8
+NUM_EPOCHS     = 40
+LEARNING_RATE  = 3e-4
+WEIGHT_DECAY   = 1e-5
+VAL_RATIO      = 0.15
+SEED           = 42
+NUM_WORKERS    = 0
+CHECKPOINT_PATH = "best_fpn_mitb3.pth"
+
+MIXED_PRECISION = True  # AMP (fp16/bf16)
+
+# --- NEW: pre-upscale for dense/compact test/val, and TTA scales ---
+PRE_UPSCALE_VAL = 1.10              # 1.08–1.15 usually works when 3% zoom fails
+TTA_SCALES      = (1.0, 1.10)       # add 0.95 if VRAM allows: (0.95, 1.0, 1.10)
+
+set_seed(SEED)
+use_cuda = torch.cuda.is_available()
+
+# ---------------- helpers: pairing by numeric ID ----------------
+def list_images(root: str, exts=('.png', '.jpg', '.jpeg', '.tif', '.tiff')) -> List[str]:
+    return [os.path.join(root, f) for f in os.listdir(root)
+            if os.path.isfile(os.path.join(root, f)) and f.lower().endswith(exts)]
+
+def extract_id(stem: str) -> str:
+    s = stem.strip().lower()
+    for pref in ('patch_', 'mask_', 'img_', 'image_', 'm_', 'p_'):
+        if s.startswith(pref):
+            s = s[len(pref):]
+    m = re.search(r'(\d+)$', s)
+    return m.group(1) if m else s
+
+def load_data_paths_by_id(patch_dir: str, mask_dir: str,
+                          exts=('.png', '.jpg', '.jpeg', '.tif', '.tiff')) -> Tuple[List[str], List[str]]:
+    if not os.path.isdir(patch_dir):
+        raise FileNotFoundError(f"PATCH_DIR not found: {patch_dir}")
+    if not os.path.isdir(mask_dir):
+        raise FileNotFoundError(f"MASK_DIR not found: {mask_dir}")
+
+    img_files = list_images(patch_dir, exts)
+    msk_files = list_images(mask_dir,  exts)
+    if not img_files:
+        raise FileNotFoundError(f"No image files with {exts} found in {patch_dir}")
+    if not msk_files:
+        raise FileNotFoundError(f"No mask files with {exts} found in {mask_dir}")
+
+    img_map = {}
+    for p in img_files:
+        kid = extract_id(Path(p).stem)
+        img_map.setdefault(kid, p)
+
+    msk_map = {}
+    for p in msk_files:
+        kid = extract_id(Path(p).stem)
+        msk_map.setdefault(kid, p)
+
+    def sort_key(k):
+        return (0, int(k)) if k.isdigit() else (1, k)
+    keys = sorted(set(img_map) & set(msk_map), key=sort_key)
+
+    missing_imgs = sorted(set(msk_map) - set(img_map), key=sort_key)[:10]
+    missing_msks = sorted(set(img_map) - set(msk_map), key=sort_key)[:10]
+
+    print(f"Found IDs -> images: {len(img_map)}, masks: {len(msk_map)}, paired: {len(keys)}")
+    if missing_imgs:
+        print("⚠️ IDs present in masks but missing in images (first 10):", missing_imgs)
+    if missing_msks:
+        print("⚠️ IDs present in images but missing in masks  (first 10):", missing_msks)
+
+    if not keys:
+        raise AssertionError("No matching IDs between images and masks. Check filename patterns.")
+
+    image_paths = [img_map[k] for k in keys]
+    mask_paths  = [msk_map[k] for k in keys]
+    return image_paths, mask_paths
+
+# ---------------- split helper ----------------
+def split_paths(image_paths: List[str], mask_paths: List[str],
+                val_ratio: float = 0.15, seed: int = 42, shuffle: bool = True):
+    assert len(image_paths) == len(mask_paths), "Image/Mask count mismatch before split."
+    n = len(image_paths)
+    idx = list(range(n))
+    rnd = np.random.RandomState(seed)
+    if shuffle:
+        rnd.shuffle(idx)
+    n_val = max(1, int(n * val_ratio))
+    val_idx = idx[:n_val]
+    trn_idx = idx[n_val:]
+    X_train = [image_paths[i] for i in trn_idx]
+    y_train = [mask_paths[i]  for i in trn_idx]
+    X_val   = [image_paths[i] for i in val_idx]
+    y_val   = [mask_paths[i]  for i in val_idx]
+    return X_train, X_val, y_train, y_val
+
+# ---------------- Anti-aliased resize helpers (NEW) ----------------
+try:
+    _BICUBIC  = Image.Resampling.BICUBIC
+    _LANCZOS  = Image.Resampling.LANCZOS
+    _BILINEAR = Image.Resampling.BILINEAR
+    _NEAREST  = Image.Resampling.NEAREST
+except Exception:
+    _BICUBIC  = Image.BICUBIC
+    _LANCZOS  = Image.LANCZOS
+    _BILINEAR = Image.BILINEAR
+    _NEAREST  = Image.NEAREST
+
+def aa_resize(pil_img: Image.Image, size_hw: Tuple[int,int]) -> Image.Image:
+    """Anti-aliased resize: LANCZOS when shrinking, BICUBIC when enlarging."""
+    W, H = size_hw
+    w0, h0 = pil_img.size
+    resample = _LANCZOS if (W < w0 or H < h0) else _BICUBIC
+    return pil_img.resize((W, H), resample=resample)
+
+# ---------------- Thin-line friendly augment (UPDATED) ----------------
+class ThinLineTransform:
+    """
+    Mild, SEM-friendly augmentations preserving thin metal lines.
+    Includes scale jitter (±8–12%) + anti-aliased resize to target.
+    """
+    def __init__(self, img_size=256):
+        self.img_size = img_size
+
+    @staticmethod
+    def _to_pil(x):
+        x = np.asarray(x).astype(np.float32)
+        if x.ndim == 3 and x.shape[2] == 1:
+            x = x[...,0]
+        x8 = (np.clip(x,0,1)*255).astype(np.uint8)
+        return Image.fromarray(x8, mode='L')
+
+    @staticmethod
+    def _to_np(p):
+        a = np.array(p, dtype=np.uint8).astype(np.float32)/255.0
+        if a.ndim == 3:
+            a = a[...,0]
+        return a
+
+    def __call__(self, img_np, mask_np):
+        img = img_np[...,0]; msk = (mask_np[...,0] > 0.5).astype(np.float32)
+        I = self._to_pil(img)
+        M = self._to_pil(msk)
+
+        # flips
+        if random.random() < 0.5:
+            I = I.transpose(Image.FLIP_LEFT_RIGHT)
+            M = M.transpose(Image.FLIP_LEFT_RIGHT)
+        if random.random() < 0.5:
+            I = I.transpose(Image.FLIP_TOP_BOTTOM)
+            M = M.transpose(Image.FLIP_TOP_BOTTOM)
+
+        # tiny affine
+        if random.random() < 0.2:
+            deg = random.uniform(-3.0, 3.0)
+            tx  = random.uniform(-0.02, 0.02)
+            ty  = random.uniform(-0.02, 0.02)
+            shx = random.uniform(-2.0, 2.0)
+            shy = random.uniform(-2.0, 2.0)
+            iw, ih = I.size
+            I = TF.affine(I, angle=deg, translate=(int(tx*iw), int(ty*ih)),
+                          scale=1.0, shear=(shx,shy), interpolation=TF.InterpolationMode.BILINEAR)
+            M = TF.affine(M, angle=deg, translate=(int(tx*iw), int(ty*ih)),
+                          scale=1.0, shear=(shx,shy), interpolation=TF.InterpolationMode.NEAREST)
+
+        # --- NEW: scale jitter (±8–12%) with AA ---
+        s = random.uniform(0.92, 1.12)
+        new_w = max(1, int(I.size[0]*s)); new_h = max(1, int(I.size[1]*s))
+        I = aa_resize(I, (new_w, new_h))
+        M = M.resize((new_w, new_h), resample=_NEAREST)
+
+        # final AA resize to net input
+        I = aa_resize(I, (self.img_size, self.img_size))
+        M = M.resize((self.img_size, self.img_size), resample=_NEAREST)
+
+        # light photometric
+        if random.random() < 0.2:
+            I = ImageEnhance.Brightness(I).enhance(random.uniform(0.9, 1.1))
+        if random.random() < 0.2:
+            I = ImageEnhance.Contrast(I).enhance(random.uniform(0.9, 1.1))
+        if random.random() < 0.1:
+            arr = np.array(I, dtype=np.float32)/255.0
+            arr = np.power(arr, random.uniform(0.9,1.1))
+            I = Image.fromarray((np.clip(arr,0,1)*255).astype(np.uint8), mode='L')
+        if random.random() < 0.1:
+            I = I.filter(ImageFilter.GaussianBlur(radius=random.uniform(0.3, 0.8)))
+
+        img_t  = TF.to_tensor(I)                  # (1,H,W)
+        mask_t = (TF.to_tensor(M) > 0.5).float()  # (1,H,W)
+        return img_t, mask_t
+
+# ---------------- Dataset (UPDATED with pre_upscale) ----------------
+class ViaDataset(Dataset):
+    def __init__(self, image_paths: List[str], mask_paths: List[str],
+                 img_size: int = 256, augment: bool = False, pre_upscale: float = 1.0):
+        assert len(image_paths) == len(mask_paths), "Image/Mask count mismatch"
+        self.image_paths = image_paths
+        self.mask_paths = mask_paths
+        self.img_size = img_size
+        self.augment = augment
+        self.pre_upscale = pre_upscale
+        self.custom_transform = ThinLineTransform(img_size) if augment else None
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx: int):
+        img = Image.open(self.image_paths[idx]).convert('L')
+        msk = Image.open(self.mask_paths[idx]).convert('L')
+
+        # --- NEW: pre-upscale for dense/compact val/test inputs ---
+        if not self.augment and self.pre_upscale != 1.0:
+            new_w = max(1, int(img.size[0] * self.pre_upscale))
+            new_h = max(1, int(img.size[1] * self.pre_upscale))
+            img = aa_resize(img, (new_w, new_h))          # BICUBIC when enlarging
+            msk = msk.resize((new_w, new_h), resample=_NEAREST)
+
+        # final AA resize to model input size
+        img = aa_resize(img, (self.img_size, self.img_size))
+        msk = msk.resize((self.img_size, self.img_size), resample=_NEAREST)
+
+        img_np = (np.array(img, dtype=np.float32)/255.0)[...,None]
+        msk_np = ((np.array(msk, dtype=np.float32)/255.0) > 0.5).astype(np.float32)[...,None]
+
+        if self.augment and self.custom_transform is not None:
+            return self.custom_transform(img_np, msk_np)
+        else:
+            img_t  = torch.tensor(img_np, dtype=torch.float32).permute(2,0,1)
+            msk_t  = torch.tensor(msk_np, dtype=torch.float32).permute(2,0,1)
+            return img_t, msk_t
+
+# ========================= Run pairing, split, and build loaders =========================
+image_paths, mask_paths = load_data_paths_by_id(PATCH_DIR, MASK_DIR)
+X_train, X_val, y_train, y_val = split_paths(image_paths, mask_paths, val_ratio=VAL_RATIO, seed=SEED, shuffle=True)
+
+train_dataset = ViaDataset(X_train, y_train, augment=True,  img_size=IMG_SIZE, pre_upscale=1.0)
+val_dataset   = ViaDataset(X_val,   y_val,   augment=False, img_size=IMG_SIZE, pre_upscale=PRE_UPSCALE_VAL)
+
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
+                          pin_memory=use_cuda, num_workers=NUM_WORKERS, drop_last=False)
+val_loader   = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
+                          pin_memory=use_cuda, num_workers=NUM_WORKERS, drop_last=False)
+
+print("Loaders ready:",
+      f"train batches={len(train_loader)} | val batches={len(val_loader)}")
+
+# ---------------- Losses (unchanged from your base, kept here) ----------------
+def soft_skeletonize(x, iters=8):
+    for _ in range(iters):
+        minpool = -F.max_pool2d(-x, kernel_size=3, stride=1, padding=1)
+        contour = F.relu(x - minpool)
+        x = F.relu(x - contour)
+    return x
+
+class CLDiceLoss(nn.Module):
+    def __init__(self, smooth=1e-6, skel_iters=8):
+        super().__init__()
+        self.smooth = smooth
+        self.skel_iters = skel_iters
+    def forward(self, logits, targets):
+        probs = torch.sigmoid(logits).clamp(1e-6, 1-1e-6)
+        t = targets.float()
+        skel_p = soft_skeletonize(probs, self.skel_iters)
+        skel_t = soft_skeletonize(t, self.skel_iters)
+        tprec = (skel_p * t).sum(dim=(1,2,3)) / (skel_p.sum(dim=(1,2,3)) + self.smooth)
+        trec  = (skel_t * probs).sum(dim=(1,2,3)) / (skel_t.sum(dim=(1,2,3)) + self.smooth)
+        cldice = 1.0 - (2*tprec*trec + self.smooth) / (tprec + trec + self.smooth)
+        return cldice.mean()
+
+class CompositeLoss(nn.Module):
+    def __init__(self, bce_w=1.0, dice_w=1.0, cldice_w=1.0, smooth=1e-6, skel_iters=8):
+        super().__init__()
+        self.bce = nn.BCEWithLogitsLoss()
+        self.cldice = CLDiceLoss(smooth=smooth, skel_iters=skel_iters)
+        self.bce_w, self.dice_w, self.cldice_w = bce_w, dice_w, cldice_w
+        self.smooth = smooth
+    def forward(self, logits, targets):
+        t = targets.float()
+        bce = self.bce(logits, t)
+        probs = torch.sigmoid(logits)
+        inter = (probs * t).sum(dim=(1,2,3))
+        denom = probs.sum(dim=(1,2,3)) + t.sum(dim=(1,2,3))
+        dice = 1 - ((2*inter + self.smooth) / (denom + self.smooth)).mean()
+        cld  = self.cldice(logits, t)
+        return self.bce_w*bce + self.dice_w*dice + self.cldice_w*cld
+
+class EdgeWeightedBCEDice(nn.Module):
+    def __init__(self, edge_weight=3.0, smooth=1e-6):
+        super().__init__()
+        self.edge_weight = edge_weight
+        self.smooth = smooth
+        self.bce = nn.BCEWithLogitsLoss(reduction='none')
+        kx = torch.tensor([[ 1, 0,-1],
+                           [ 2, 0,-2],
+                           [ 1, 0,-1]], dtype=torch.float32).view(1,1,3,3)
+        ky = torch.tensor([[ 1, 2, 1],
+                           [ 0, 0, 0],
+                           [-1,-2,-1]], dtype=torch.float32).view(1,1,3,3)
+        self.register_buffer('kx', kx)
+        self.register_buffer('ky', ky)
+    def forward(self, logits, targets):
+        t = targets.to(dtype=logits.dtype)
+        kx = self.kx.to(device=t.device, dtype=t.dtype)
+        ky = self.ky.to(device=t.device, dtype=t.dtype)
+        edges_x = F.conv2d(t, kx, padding=1)
+        edges_y = F.conv2d(t, ky, padding=1)
+        edges = (edges_x.abs() + edges_y.abs()).clamp(0,1)
+        w = 1.0 + self.edge_weight*edges
+        bce = (self.bce(logits, t) * w).mean()
+        probs = torch.sigmoid(logits)
+        inter = (probs * t * w).sum(dim=(1,2,3))
+        denom = (probs*w).sum(dim=(1,2,3)) + (t*w).sum(dim=(1,2,3))
+        dice = 1 - ((2*inter + self.smooth) / (denom + self.smooth)).mean()
+        return bce + dice
+
+use_edge_blend = True
+composite = CompositeLoss(bce_w=1.0, dice_w=1.0, cldice_w=1.0, skel_iters=8)
+edge_loss = EdgeWeightedBCEDice(edge_weight=3.0)
+
+def total_loss_fn(logits, targets):
+    with torch.cuda.amp.autocast(enabled=False):
+        l_comp = composite(logits.float(), targets.float())
+        if use_edge_blend:
+            l_edge = edge_loss(logits.float(), targets.float())
+            return 0.8 * l_comp + 0.2 * l_edge
+        else:
+            return l_comp
+
+# ---------------- Model ----------------
+try:
+    model = smp.FPN(
+        encoder_name='mit_b3',
+        encoder_weights='imagenet',
+        in_channels=1,
+        classes=1,
+        activation=None
+    ).to(device)
+except Exception as e:
+    print("Falling back to encoder_weights=None due to:", e)
+    model = smp.FPN(
+        encoder_name='mit_b3',
+        encoder_weights=None,
+        in_channels=1,
+        classes=1,
+        activation=None
+    ).to(device)
+
+n_params = sum(p.numel() for p in model.parameters())/1e6
+print(f"Model: FPN(mit_b3) | Params: {n_params:.2f}M")
+
+# Optimizer & scheduler
+optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+
+from torch.cuda.amp import GradScaler
+scaler = GradScaler(enabled=(MIXED_PRECISION and not (use_cuda and torch.cuda.is_bf16_supported())))
+
+# Sanity forward
+model.eval()
+with torch.no_grad():
+    dummy = torch.randn(2, 1, IMG_SIZE, IMG_SIZE, device=device)
+    out = model(dummy)
+    print("Output shape:", tuple(out.shape))
+
+# ---------------- TTA inference (NEW) ----------------
+@torch.no_grad()
+def predict_with_tta(model, images, tta_scales=(1.0, 1.10)):
+    """
+    images: (B,1,H,W) float32 [0,1]; returns averaged logits at native (H,W).
+    """
+    device = next(model.parameters()).device
+    B, C, H, W = images.shape
+    acc = torch.zeros((B,1,H,W), dtype=torch.float32, device=device)
+
+    for s in tta_scales:
+        if s == 1.0:
+            im_s = images
+        else:
+            mode = 'bicubic' if s > 1.0 else 'area'
+            im_s = F.interpolate(images, scale_factor=s, mode=mode,
+                                 align_corners=False if mode!='area' else None)
+        logits_s = model(im_s)
+        logits = F.interpolate(logits_s, size=(H,W), mode='bicubic', align_corners=False)
+        acc += logits.float()
+
+    return acc / float(len(tta_scales))
+
+@torch.no_grad()
+def iou_from_logits(logits: torch.Tensor, targets: torch.Tensor,
+                    threshold: float = 0.5, eps: float = 1e-6) -> torch.Tensor:
+    probs = torch.sigmoid(logits)
+    preds = (probs > threshold).float()
+    t = targets.float()
+    dims = tuple(range(2, preds.ndim))
+    inter = (preds * t).sum(dims)
+    union = preds.sum(dims) + t.sum(dims) - inter
+    return ((inter + eps) / (union + eps)).mean()
+
+def train_one_epoch(model, loader, device):
+    model.train()
+    running = 0.0
+    for images, masks in loader:
+        images = images.to(device, non_blocking=True)
+        masks  = masks.to(device, non_blocking=True)
+
+        optimizer.zero_grad(set_to_none=True)
+        with torch.autocast(
+            device_type='cuda',
+            dtype=(torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16),
+            enabled=torch.cuda.is_available() and MIXED_PRECISION
+        ):
+            logits = model(images)
+        loss = total_loss_fn(logits, masks)
+
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
+        running += loss.item() * images.size(0)
+    return running / len(loader.dataset)
+
+@torch.no_grad()
+def validate(model, loader, device):
+    model.eval()
+    val_loss = 0.0
+    val_iou  = 0.0
+    for images, masks in loader:
+        images = images.to(device, non_blocking=True)
+        masks  = masks.to(device, non_blocking=True)
+        with torch.autocast(
+            device_type='cuda',
+            dtype=(torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16),
+            enabled=torch.cuda.is_available() and MIXED_PRECISION
+        ):
+            # --- NEW: TTA prediction ---
+            logits = predict_with_tta(model, images, tta_scales=TTA_SCALES)
+
+        loss = total_loss_fn(logits, masks)
+        val_loss += loss.item() * images.size(0)
+        val_iou  += iou_from_logits(logits, masks, threshold=0.5).item() * images.size(0)
+
+    n = len(loader.dataset)
+    return val_loss / n, val_iou / n
+
+# ---------------- Train ----------------
+best_val = float('inf')
+best_iou = 0.0
+print("Starting training...")
+
+for epoch in range(NUM_EPOCHS):
+    tr_loss = train_one_epoch(model, train_loader, device)
+    val_loss, val_iou = validate(model, val_loader, device)
+    scheduler.step(val_loss)
+
+    print(f"Epoch {epoch+1}/{NUM_EPOCHS} | "
+          f"Train: {tr_loss:.4f} | Val: {val_loss:.4f} | "
+          f"Val IoU: {val_iou:.4f} | LR: {optimizer.param_groups[0]['lr']:.2e}")
+
+    if val_loss < best_val:
+        best_val = val_loss
+        best_iou = val_iou
+        torch.save({
+            'epoch': epoch+1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'val_loss': val_loss,
+            'val_iou' : val_iou,
+            'img_size': IMG_SIZE
+        }, CHECKPOINT_PATH)
+        print(f"  ↳ saved best checkpoint: {CHECKPOINT_PATH}")
+
+print("Done. Best Val Loss:", f"{best_val:.4f}", "| Best Val IoU:", f"{best_iou:.4f}")
+
+# ---------------- Quick visual check ----------------
+model.eval()
+imgs, msks = next(iter(val_loader))
+with torch.no_grad():
+    logits = predict_with_tta(model, imgs.to(device), tta_scales=TTA_SCALES)
+    probs  = torch.sigmoid(logits).cpu()
+    preds  = (probs > 0.5).float()
+
+N = min(12, imgs.size(0))
+fig, axes = plt.subplots(N, 3, figsize=(9, 3*N))
+for i in range(N):
+    axes[i,0].imshow(imgs[i,0].numpy(), cmap='gray'); axes[i,0].set_title("Image"); axes[i,0].axis('off')
+    axes[i,1].imshow(msks[i,0].numpy(), cmap='gray'); axes[i,1].set_title("Mask");  axes[i,1].axis('off')
+    axes[i,2].imshow(preds[i,0].numpy(), cmap='gray'); axes[i,2].set_title("Pred");  axes[i,2].axis('off')
+plt.tight_layout(); plt.show()
+
