@@ -3711,3 +3711,276 @@ for i in range(N):
     axes[i,1].imshow(val_msks[i,0].numpy(), cmap='gray'); axes[i,1].set_title("Mask (GT)"); axes[i,1].axis('off')
     axes[i,2].imshow(preds[i,0].numpy(),   cmap='gray'); axes[i,2].set_title("Pred"); axes[i,2].axis('off')
 plt.tight_layout(); plt.show()
+
+
+
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Dropout, Conv2DTranspose, concatenate, BatchNormalization, Activation
+from tensorflow.keras.models import Model, load_model
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+import os
+from sklearn.model_selection import train_test_split
+
+# ==================== DATA PREPARATION ====================
+
+class SegmentationDataLoader:
+    """
+    Data loader for segmentation tasks
+    Assumes you have image files and corresponding mask files in separate directories
+    """
+    def __init__(self, image_dir, mask_dir, img_size=(256, 256)):
+        self.image_dir = image_dir
+        self.mask_dir = mask_dir
+        self.img_size = img_size
+        self.image_files = sorted([f for f in os.listdir(image_dir) if f.endswith(('.png', '.jpg', '.jpeg'))])
+        self.mask_files = sorted([f for f in os.listdir(mask_dir) if f.endswith(('.png', '.jpg', '.jpeg'))])
+        
+        assert len(self.image_files) == len(self.mask_files), "Number of images and masks must match"
+    
+    def preprocess_image(self, image_path):
+        """Load and preprocess image"""
+        image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = cv2.resize(image, self.img_size)
+        image = image.astype(np.float32) / 255.0
+        return image
+    
+    def preprocess_mask(self, mask_path):
+        """Load and preprocess mask"""
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        mask = cv2.resize(mask, self.img_size)
+        mask = (mask > 0).astype(np.float32)  # Binarize mask
+        return np.expand_dims(mask, axis=-1)
+    
+    def load_data(self):
+        """Load all images and masks"""
+        images = []
+        masks = []
+        
+        for img_file, mask_file in zip(self.image_files, self.mask_files):
+            img_path = os.path.join(self.image_dir, img_file)
+            mask_path = os.path.join(self.mask_dir, mask_file)
+            
+            image = self.preprocess_image(img_path)
+            mask = self.preprocess_mask(mask_path)
+            
+            images.append(image)
+            masks.append(mask)
+        
+        return np.array(images), np.array(masks)
+
+# ==================== ENHANCED U-NET MODEL ====================
+
+def conv_block(inputs, filters, kernel_size=3, dropout_rate=0.1):
+    """Convolutional block with batch normalization and dropout"""
+    x = Conv2D(filters, kernel_size, padding='same', kernel_initializer='he_normal')(inputs)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Dropout(dropout_rate)(x)
+    
+    x = Conv2D(filters, kernel_size, padding='same', kernel_initializer='he_normal')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    
+    return x
+
+def build_unet(input_size=(256, 256, 3), num_classes=1, dropout_rate=0.1):
+    """Build U-Net model with skip connections:cite[10]"""
+    inputs = Input(input_size)
+    
+    # Encoder (Contracting path)
+    c1 = conv_block(inputs, 64, dropout_rate=dropout_rate)
+    p1 = MaxPooling2D((2, 2))(c1)
+    
+    c2 = conv_block(p1, 128, dropout_rate=dropout_rate)
+    p2 = MaxPooling2D((2, 2))(c2)
+    
+    c3 = conv_block(p2, 256, dropout_rate=dropout_rate)
+    p3 = MaxPooling2D((2, 2))(c3)
+    
+    c4 = conv_block(p3, 512, dropout_rate=dropout_rate)
+    p4 = MaxPooling2D((2, 2))(c4)
+    
+    # Bridge
+    c5 = conv_block(p4, 1024, dropout_rate=dropout_rate)
+    
+    # Decoder (Expanding path) with skip connections
+    u6 = Conv2DTranspose(512, 2, strides=(2, 2), padding='same')(c5)
+    u6 = concatenate([u6, c4])
+    c6 = conv_block(u6, 512, dropout_rate=dropout_rate)
+    
+    u7 = Conv2DTranspose(256, 2, strides=(2, 2), padding='same')(c6)
+    u7 = concatenate([u7, c3])
+    c7 = conv_block(u7, 256, dropout_rate=dropout_rate)
+    
+    u8 = Conv2DTranspose(128, 2, strides=(2, 2), padding='same')(c7)
+    u8 = concatenate([u8, c2])
+    c8 = conv_block(u8, 128, dropout_rate=dropout_rate)
+    
+    u9 = Conv2DTranspose(64, 2, strides=(2, 2), padding='same')(c8)
+    u9 = concatenate([u9, c1])
+    c9 = conv_block(u9, 64, dropout_rate=dropout_rate)
+    
+    # Output layer
+    outputs = Conv2D(num_classes, 1, activation='sigmoid')(c9)
+    
+    model = Model(inputs=[inputs], outputs=[outputs])
+    return model
+
+# ==================== LOSS FUNCTIONS AND METRICS ====================
+
+def dice_coeff(y_true, y_pred, smooth=1.0):
+    """Dice coefficient metric:cite[2]:cite[9]"""
+    y_true_f = tf.keras.backend.flatten(y_true)
+    y_pred_f = tf.keras.backend.flatten(y_pred)
+    intersection = tf.keras.backend.sum(y_true_f * y_pred_f)
+    return (2. * intersection + smooth) / (tf.keras.backend.sum(y_true_f) + tf.keras.backend.sum(y_pred_f) + smooth)
+
+def dice_loss(y_true, y_pred):
+    """Dice loss function"""
+    return 1 - dice_coeff(y_true, y_pred)
+
+def bce_dice_loss(y_true, y_pred):
+    """Combined BCE and Dice loss"""
+    bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+    dice = dice_loss(y_true, y_pred)
+    return bce + dice
+
+# ==================== MODEL TRAINING ====================
+
+def train_segmentation_model():
+    """Complete training pipeline"""
+    
+    # Configuration
+    IMG_SIZE = (256, 256)
+    BATCH_SIZE = 8
+    EPOCHS = 50
+    LEARNING_RATE = 1e-4
+    
+    # Load data
+    data_loader = SegmentationDataLoader(
+        image_dir='path/to/your/images',
+        mask_dir='path/to/your/masks', 
+        img_size=IMG_SIZE
+    )
+    
+    X, y = data_loader.load_data()
+    
+    # Split data
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    print(f"Training samples: {X_train.shape[0]}")
+    print(f"Validation samples: {X_val.shape[0]}")
+    
+    # Build model
+    model = build_unet(input_size=(*IMG_SIZE, 3), num_classes=1, dropout_rate=0.2)
+    
+    # Compile model
+    model.compile(
+        optimizer=Adam(learning_rate=LEARNING_RATE),
+        loss=bce_dice_loss,
+        metrics=['accuracy', dice_coeff]
+    )
+    
+    # Callbacks
+    callbacks = [
+        ModelCheckpoint('best_model.h5', save_best_only=True, monitor='val_dice_coeff', mode='max'),
+        ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=1e-7),
+        EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+    ]
+    
+    # Train model
+    history = model.fit(
+        X_train, y_train,
+        batch_size=BATCH_SIZE,
+        epochs=EPOCHS,
+        validation_data=(X_val, y_val),
+        callbacks=callbacks,
+        shuffle=True
+    )
+    
+    return model, history
+
+# ==================== INFERENCE AND VISUALIZATION ====================
+
+def predict_and_visualize(model, image_path, mask_path=None):
+    """Make predictions and visualize results"""
+    
+    # Preprocess input
+    image = cv2.imread(image_path)
+    original_size = image.shape[:2]
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image_input = cv2.resize(image_rgb, (256, 256))
+    image_input = image_input.astype(np.float32) / 255.0
+    image_input = np.expand_dims(image_input, axis=0)
+    
+    # Predict
+    prediction = model.predict(image_input)[0]
+    prediction_mask = (prediction > 0.5).astype(np.uint8)
+    
+    # Resize back to original size
+    prediction_mask = cv2.resize(prediction_mask.squeeze(), (original_size[1], original_size[0]))
+    
+    # Visualize
+    fig, axes = plt.subplots(1, 3 if mask_path else 2, figsize=(15, 5))
+    
+    axes[0].imshow(image_rgb)
+    axes[0].set_title('Original Image')
+    axes[0].axis('off')
+    
+    axes[1].imshow(prediction_mask, cmap='gray')
+    axes[1].set_title('Predicted Mask')
+    axes[1].axis('off')
+    
+    if mask_path:
+        true_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        axes[2].imshow(true_mask, cmap='gray')
+        axes[2].set_title('True Mask')
+        axes[2].axis('off')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    return prediction_mask
+
+# ==================== MAIN EXECUTION ====================
+
+if __name__ == "__main__":
+    # Train the model
+    print("Starting model training...")
+    model, history = train_segmentation_model()
+    
+    # Save final model
+    model.save('final_segmentation_model.h5')
+    print("Model training completed and saved!")
+    
+    # Plot training history
+    plt.figure(figsize=(12, 4))
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history['loss'], label='Training Loss')
+    plt.plot(history.history['val_loss'], label='Validation Loss')
+    plt.title('Model Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history['dice_coeff'], label='Training Dice')
+    plt.plot(history.history['val_dice_coeff'], label='Validation Dice')
+    plt.title('Dice Coefficient')
+    plt.xlabel('Epoch')
+    plt.ylabel('Dice')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig('training_history.png')
+    plt.show()
+    
+    # Example inference (update paths as needed)
+    # prediction = predict_and_visualize(model, 'path/to/test/image.jpg', 'path/to/test/mask.jpg')
