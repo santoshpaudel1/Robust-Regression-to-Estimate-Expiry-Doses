@@ -353,3 +353,1357 @@ if run:
     st.write(f"- Pixels-per-unit: **{report['pixels_per_unit_x']:.6f} (x)**, **{report['pixels_per_unit_y']:.6f} (y)**")
     st.write(f"- Stage Y-up: **{report['ic_y_is_up']}**, Inclusive bbox: **{report['bbox_inclusive']}**")
     st.write(f"- Refinement: **{report['refine_overlap_px']} px**, Blend: **{report['blend_mode']}**")
+
+
+
+
+
+############################ second method ###################################
+
+
+import io, math, json
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import streamlit as st
+import cv2
+
+# --------------- Enhanced Helpers for Gap Handling ---------------
+def read_png_bytes(file):
+    data = np.frombuffer(file.read(), np.uint8)
+    img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise ValueError(f"Cannot read PNG: {getattr(file, 'name', 'uploaded file')}")
+    return img
+
+def to_gray(img):
+    if img.ndim == 3:
+        if img.shape[2] == 4:
+            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return img
+
+def hann2d(shape):
+    h, w = shape
+    wy = np.hanning(h)
+    wx = np.hanning(w)
+    return np.outer(wy, wx).astype(np.float32)
+
+def enhanced_phase_corr(ref_strip, mov_strip, max_shift=100):
+    """Enhanced phase correlation with validation"""
+    try:
+        # Ensure strips are the same size
+        if ref_strip.shape != mov_strip.shape:
+            mov_strip = cv2.resize(mov_strip, (ref_strip.shape[1], ref_strip.shape[0]))
+            
+        win = hann2d(ref_strip.shape)
+        r = ref_strip.astype(np.float32) * win
+        m = mov_strip.astype(np.float32) * win
+        
+        (shifty, shiftx), response = cv2.phaseCorrelate(r, m)
+        
+        # Validate correlation quality
+        if response < 0.05:  # Lower threshold for challenging cases
+            return 0.0, 0.0, False, response
+            
+        # Check if shift is reasonable
+        if abs(shiftx) > max_shift or abs(shifty) > max_shift:
+            return 0.0, 0.0, False, response
+            
+        return float(shiftx), float(shifty), True, response
+        
+    except Exception as e:
+        return 0.0, 0.0, False, 0.0
+
+def detect_gap_from_coordinates(tile1, tile2, direction='horizontal', bbox_inclusive=False):
+    """Detect if there's a gap between tiles based on coordinates"""
+    if direction == 'horizontal':
+        # For left-right neighbors
+        if bbox_inclusive:
+            gap = tile1["x1"] - tile2["x2"] - 1
+        else:
+            gap = tile1["x1"] - tile2["x2"]
+    else:  # vertical
+        if bbox_inclusive:
+            gap = tile1["y1"] - tile2["y2"] - 1
+        else:
+            gap = tile1["y1"] - tile2["y2"]
+    
+    return gap
+
+def estimate_gap_from_visual(canvas, current_tile, neighbor, direction, analysis_width=100):
+    """Try to estimate gap size from visual content"""
+    try:
+        if direction == 'horizontal':
+            # Look for content edges near the expected boundary
+            neighbor_right_edge = neighbor["tlx"] + neighbor["w"]
+            current_left_edge = current_tile["tlx"]
+            
+            # Extract strips from both sides of the potential gap
+            strip_height = min(neighbor["h"], current_tile["h"], 100)
+            neighbor_strip = canvas[neighbor["tly"]:neighbor["tly"]+strip_height, 
+                                   neighbor_right_edge-analysis_width:neighbor_right_edge]
+            current_strip = canvas[current_tile["tly"]:current_tile["tly"]+strip_height,
+                                 current_left_edge:current_left_edge+analysis_width]
+            
+            # Simple edge detection to find content boundaries
+            neighbor_edges = cv2.Canny(neighbor_strip, 50, 150)
+            current_edges = cv2.Canny(current_strip, 50, 150)
+            
+            # Find the rightmost edge in neighbor and leftmost in current
+            neighbor_edge_pos = np.max(np.where(neighbor_edges > 0)[1]) if np.any(neighbor_edges) else 0
+            current_edge_pos = np.min(np.where(current_edges > 0)[1]) if np.any(current_edges) else analysis_width
+            
+            estimated_gap = (analysis_width - neighbor_edge_pos) + current_edge_pos
+            return estimated_gap
+            
+    except Exception:
+        pass
+    
+    return None
+
+def feather_blend(canvas, tile, x, y, ksize=51):
+    H, W = canvas.shape[:2]
+    h, w = tile.shape[:2]
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(W, x + w), min(H, y + h)
+    if x0 >= x1 or y0 >= y1:
+        return
+    c = canvas[y0:y1, x0:x1]
+    t = tile[y0 - y : y0 - y + (y1 - y0), x0 - x : x0 - x + (x1 - x0)]
+    mask = (t > 0).astype(np.float32)
+    if ksize % 2 == 0: ksize += 1
+    if ksize > 1:
+        mask = cv2.GaussianBlur(mask, (ksize, ksize), 0)
+    c[:] = (c.astype(np.float32)*(1-mask) + t.astype(np.float32)*mask).astype(canvas.dtype)
+
+def place_with_gap_fill(canvas, tile, x, y, gap_info=None, mode="feather", feather_ksize=51):
+    """Place tile with optional gap filling"""
+    if mode == "feather":
+        feather_blend(canvas, tile, x, y, feather_ksize)
+    else:
+        H, W = canvas.shape[:2]
+        h, w = tile.shape[:2]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + w), min(H, y + h)
+        if x0 >= x1 or y0 >= y1: return
+        c = canvas[y0:y1, x0:x1]
+        t = tile[y0 - y : y0 - y + (y1 - y0), x0 - x : x0 - x + (x1 - x0)]
+        if mode == "overwrite":
+            c[:] = t
+        elif mode == "average":
+            c[:] = ((c.astype(np.float32)+t.astype(np.float32))/2).astype(c.dtype)
+
+def estimate_scale(df, images_by_name, bbox_inclusive):
+    sx_list, sy_list = [], []
+    for _, r in df.iterrows():
+        name = str(r["filename"])
+        if name not in images_by_name: continue
+        img = images_by_name[name]["img"]
+        h, w = img.shape[:2]
+        dx = float(r["x2"]) - float(r["x1"]) + (1 if bbox_inclusive else 0)
+        dy = float(r["y2"]) - float(r["y1"]) + (1 if bbox_inclusive else 0)
+        if dx <= 0 or dy <= 0: continue
+        sx_list.append(w / dx)
+        sy_list.append(h / dy)
+    if not sx_list or not sy_list:
+        raise RuntimeError("Could not estimate pixels-per-unit — check CSV/images.")
+    return float(np.median(sx_list)), float(np.median(sy_list))
+
+def build_mosaic_with_gap_handling(
+    df, images_by_name,
+    ic_y_is_up=True,
+    bbox_inclusive=False,
+    pixels_per_unit_x=None,
+    pixels_per_unit_y=None,
+    refine_overlap_px=50,
+    blend_mode="feather",
+    feather_ksize=51,
+    output_color=False,
+    alignment_method="auto",
+    gap_handling="warn",  # "warn", "estimate", or "ignore"
+    progress_cb=None
+):
+    # Validate numeric
+    df = df.copy()
+    for col in ["x1","y1","x2","y2"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    if df[["x1","y1","x2","y2"]].isnull().any().any():
+        raise ValueError("CSV contains non-numeric coordinates.")
+
+    # Load tiles
+    tiles = []
+    for _, r in df.iterrows():
+        name = str(r["filename"])
+        if name not in images_by_name:
+            raise FileNotFoundError(f"Missing image: {name}")
+        raw = images_by_name[name]["img"]
+        img = raw.copy()
+        if output_color:
+            if img.ndim == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            elif img.shape[2] == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        else:
+            img = to_gray(img)
+        h, w = img.shape[:2]
+        x1, y1, x2, y2 = map(float, [r["x1"], r["y1"], r["x2"], r["y2"]])
+        dx = x2 - x1 + (1 if bbox_inclusive else 0)
+        dy = y2 - y1 + (1 if bbox_inclusive else 0)
+        tiles.append(dict(filename=name, img=img, h=h, w=w, x1=x1, y1=y1, x2=x2, y2=y2, dx=dx, dy=dy))
+
+    # Scale
+    if pixels_per_unit_x is None or pixels_per_unit_y is None:
+        sx, sy = estimate_scale(df, images_by_name, bbox_inclusive)
+    else:
+        sx, sy = float(pixels_per_unit_x), float(pixels_per_unit_y)
+
+    # Extents (stage units)
+    xs, ys = [], []
+    for t in tiles:
+        xs += [t["x1"], t["x2"]]
+        ys += [t["y1"], t["y2"]]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+
+    # Map top-left to canvas pixels
+    for t in tiles:
+        if ic_y_is_up:
+            tly = (ymax - t["y1"]) * sy
+        else:
+            tly = (t["y1"] - ymin) * sy
+        tlx = (t["x1"] - xmin) * sx
+        t["tlx"], t["tly"] = int(round(tlx)), int(round(tly))
+
+    # Canvas - add extra padding for potential gap filling
+    canvas_W = int(math.ceil((xmax - xmin) * sx)) + 100  # Extra padding
+    canvas_H = int(math.ceil((ymax - ymin) * sy)) + 100  # Extra padding
+    if output_color:
+        canvas = np.zeros((canvas_H, canvas_W, 3), dtype=np.uint8)
+    else:
+        canvas = np.zeros((canvas_H, canvas_W), dtype=np.uint8)
+
+    # Sort & place
+    tiles_sorted = sorted(tiles, key=lambda t: (t["tly"], t["tlx"]))
+    transforms = {}
+    gap_report = []
+
+    # Enhanced neighbor search
+    def left_neighbor(t):
+        cands = [u for u in tiles_sorted if u is not t 
+                 and abs(u["tly"]-t["tly"]) < max(refine_overlap_px * 3, 150)
+                 and u["tlx"] < t["tlx"]]
+        return max(cands, key=lambda u: u["tlx"]) if cands else None
+
+    def top_neighbor(t):
+        cands = [u for u in tiles_sorted if u is not t 
+                 and abs(u["tlx"]-t["tlx"]) < max(refine_overlap_px * 3, 150)
+                 and u["tly"] < t["tly"]]
+        return max(cands, key=lambda u: u["tly"]) if cands else None
+
+    # First tile
+    t0 = tiles_sorted[0]
+    place_with_gap_fill(canvas, t0["img"], t0["tlx"], t0["tly"], mode=blend_mode, feather_ksize=feather_ksize)
+    transforms[t0["filename"]] = {"dx":0.0, "dy":0.0, "tlx":t0["tlx"], "tly":t0["tly"], "method": "initial"}
+
+    # Enhanced placement with gap detection
+    for i, t in enumerate(tiles_sorted[1:], start=2):
+        img = t["img"]
+        x_coarse, y_coarse = t["tlx"], t["tly"]
+        dx_total = dy_total = 0.0
+        used = 0
+        methods_used = []
+        gap_detected = False
+
+        if refine_overlap_px and refine_overlap_px > 0:
+            max_shift = refine_overlap_px * 2
+
+            # Left neighbor alignment with gap detection
+            L = left_neighbor(t)
+            if L is not None:
+                # Check for gap from coordinates
+                coord_gap = detect_gap_from_coordinates(t, L, 'horizontal', bbox_inclusive)
+                gap_pixels = coord_gap * sx if coord_gap > 0 else 0
+                
+                if gap_pixels > 10:  # Significant gap detected
+                    gap_detected = True
+                    gap_report.append({
+                        "tile1": L["filename"],
+                        "tile2": t["filename"],
+                        "gap_pixels": gap_pixels,
+                        "direction": "horizontal",
+                        "coord_gap": coord_gap
+                    })
+                    
+                    if gap_handling == "estimate":
+                        # Try to estimate gap from visual content
+                        visual_gap = estimate_gap_from_visual(canvas, t, L, 'horizontal')
+                        if visual_gap is not None and visual_gap < gap_pixels:
+                            # Adjust position based on visual estimation
+                            dx_total -= (gap_pixels - visual_gap)
+                            used += 1
+                            methods_used.append("gap_estimation")
+                else:
+                    # Normal overlap case - try alignment methods
+                    analysis_width = min(max(refine_overlap_px * 2, 60), img.shape[1] // 3, L["w"] // 3)
+                    analysis_height = min(img.shape[0], L["h"])
+                    
+                    mov_strip = to_gray(img[:, :analysis_width]) if img.ndim==3 else img[:, :analysis_width]
+                    
+                    xL, yL = L["tlx"], L["tly"]
+                    ref_x0 = xL + L["w"] - analysis_width
+                    ref_y0 = max(0, min(y_coarse, canvas_H - analysis_height))
+                    ref_x1 = ref_x0 + analysis_width
+                    ref_y1 = ref_y0 + analysis_height
+                    
+                    if (0 <= ref_x0 < ref_x1 <= canvas_W and 
+                        0 <= ref_y0 < ref_y1 <= canvas_H and
+                        ref_y1 - ref_y0 == mov_strip.shape[0]):
+                        
+                        ref_strip = canvas[ref_y0:ref_y1, ref_x0:ref_x1]
+                        ref_strip = to_gray(ref_strip) if ref_strip.ndim==3 else ref_strip
+                        
+                        if ref_strip.size > 0 and mov_strip.size > 0:
+                            success = False
+                            sxp, syp = 0.0, 0.0
+                            method_used = "none"
+                            response = 0.0
+                            
+                            if alignment_method in ["auto", "phase_correlation"]:
+                                sxp, syp, success, response = enhanced_phase_corr(ref_strip, mov_strip, max_shift)
+                                if success:
+                                    method_used = f"phase_correlation (r:{response:.3f})"
+                            
+                            if not success and alignment_method in ["auto", "feature_based"]:
+                                # Skip feature-based for very low response
+                                if response > 0.02:  
+                                    try:
+                                        # Fallback to simple template matching for difficult cases
+                                        result = cv2.matchTemplate(ref_strip, mov_strip, cv2.TM_CCOEFF_NORMED)
+                                        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                                        if max_val > 0.3:  # Reasonable match
+                                            sxp = max_loc[0] - (mov_strip.shape[1] // 2)
+                                            syp = max_loc[1] - (mov_strip.shape[0] // 2)
+                                            success = True
+                                            method_used = f"template_match (r:{max_val:.3f})"
+                                    except:
+                                        pass
+                            
+                            if success:
+                                dx_total += sxp
+                                dy_total += syp
+                                used += 1
+                                methods_used.append(method_used)
+
+            # Similar enhanced logic for top neighbor...
+            Tn = top_neighbor(t)
+            if Tn is not None:
+                coord_gap = detect_gap_from_coordinates(t, Tn, 'vertical', bbox_inclusive)
+                gap_pixels = coord_gap * sy if coord_gap > 0 else 0
+                
+                if gap_pixels > 10:
+                    gap_detected = True
+                    gap_report.append({
+                        "tile1": Tn["filename"],
+                        "tile2": t["filename"],
+                        "gap_pixels": gap_pixels,
+                        "direction": "vertical",
+                        "coord_gap": coord_gap
+                    })
+                else:
+                    # Normal overlap case for top neighbor (similar to left neighbor)
+                    analysis_height = min(max(refine_overlap_px * 2, 60), img.shape[0] // 3, Tn["h"] // 3)
+                    analysis_width = min(img.shape[1], Tn["w"])
+                    
+                    mov_strip = to_gray(img[:analysis_height, :]) if img.ndim==3 else img[:analysis_height, :]
+                    
+                    xT, yT = Tn["tlx"], Tn["tly"]
+                    ref_x0 = max(0, min(x_coarse, canvas_W - analysis_width))
+                    ref_y0 = yT + Tn["h"] - analysis_height
+                    ref_x1 = ref_x0 + analysis_width
+                    ref_y1 = ref_y0 + analysis_height
+                    
+                    if (0 <= ref_x0 < ref_x1 <= canvas_W and 
+                        0 <= ref_y0 < ref_y1 <= canvas_H and
+                        ref_x1 - ref_x0 == mov_strip.shape[1]):
+                        
+                        ref_strip = canvas[ref_y0:ref_y1, ref_x0:ref_x1]
+                        ref_strip = to_gray(ref_strip) if ref_strip.ndim==3 else ref_strip
+                        
+                        if ref_strip.size > 0 and mov_strip.size > 0:
+                            success = False
+                            sxp, syp = 0.0, 0.0
+                            method_used = "none"
+                            response = 0.0
+                            
+                            if alignment_method in ["auto", "phase_correlation"]:
+                                sxp, syp, success, response = enhanced_phase_corr(ref_strip, mov_strip, max_shift)
+                                if success:
+                                    method_used = f"phase_correlation (r:{response:.3f})"
+                            
+                            if not success and response > 0.02:
+                                try:
+                                    result = cv2.matchTemplate(ref_strip, mov_strip, cv2.TM_CCOEFF_NORMED)
+                                    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                                    if max_val > 0.3:
+                                        sxp = max_loc[0] - (mov_strip.shape[1] // 2)
+                                        syp = max_loc[1] - (mov_strip.shape[0] // 2)
+                                        success = True
+                                        method_used = f"template_match (r:{max_val:.3f})"
+                                except:
+                                    pass
+                            
+                            if success:
+                                dx_total += sxp
+                                dy_total += syp
+                                used += 1
+                                methods_used.append(method_used)
+
+        # Apply final adjustment
+        dx = dx_total / used if used else 0.0
+        dy = dy_total / used if used else 0.0
+        
+        x_final = int(round(x_coarse + dx))
+        y_final = int(round(y_coarse + dy))
+        
+        place_with_gap_fill(canvas, img, x_final, y_final, mode=blend_mode, feather_ksize=feather_ksize)
+        
+        transforms[t["filename"]] = {
+            "dx": float(dx), 
+            "dy": float(dy), 
+            "tlx": x_final, 
+            "tly": y_final,
+            "methods_used": methods_used if methods_used else ["coords_only"],
+            "gap_detected": gap_detected
+        }
+
+        if progress_cb:
+            progress_cb(i, len(tiles_sorted))
+
+    # Crop canvas back to actual content
+    non_zero_coords = np.where(canvas > 0)
+    if len(non_zero_coords[0]) > 0:
+        min_y, max_y = np.min(non_zero_coords[0]), np.max(non_zero_coords[0])
+        min_x, max_x = np.min(non_zero_coords[1]), np.max(non_zero_coords[1])
+        canvas = canvas[min_y:max_y+1, min_x:max_x+1]
+        
+        # Update tile positions relative to cropped canvas
+        for tile_info in transforms.values():
+            tile_info["tlx"] -= min_x
+            tile_info["tly"] -= min_y
+
+    report = {
+        "ic_y_is_up": ic_y_is_up,
+        "bbox_inclusive": bbox_inclusive,
+        "pixels_per_unit_x": sx,
+        "pixels_per_unit_y": sy,
+        "refine_overlap_px": refine_overlap_px,
+        "blend_mode": blend_mode,
+        "alignment_method": alignment_method,
+        "gap_handling": gap_handling,
+        "gaps_detected": gap_report,
+        "tiles": transforms
+    }
+    return canvas, report
+
+def encode_png(img):
+    if img.dtype != np.uint8:
+        img = np.clip(img, 0, 255).astype(np.uint8)
+    ok, buf = cv2.imencode(".png", img)
+    return buf.tobytes() if ok else None
+
+# --------------- Enhanced UI with Gap Handling ---------------
+st.set_page_config(page_title="SEM Stitcher with Gap Handling", layout="wide")
+st.title("🔬 SEM Image Stitcher - Handles Gaps & Overlaps")
+
+st.markdown("""
+**Now handles both overlapping tiles AND gaps between tiles**
+- Automatically detects gaps from coordinates
+- Provides gap analysis and warnings
+- Uses coordinate-based placement when no overlap exists
+""")
+
+c1, c2 = st.columns(2)
+with c1:
+    uploaded_imgs = st.file_uploader("Upload PNG tiles (multiple)", type=["png"], accept_multiple_files=True)
+with c2:
+    csv_file = st.file_uploader("Upload CSV (filename,x1,y1,x2,y2)", type=["csv"])
+
+images_by_name = {}
+if uploaded_imgs:
+    for f in uploaded_imgs:
+        images_by_name[f.name] = {"img": read_png_bytes(f)}
+    st.success(f"Loaded {len(uploaded_imgs)} images")
+
+if csv_file is not None:
+    df = pd.read_csv(csv_file)
+else:
+    st.info("No CSV uploaded yet. Paste or create rows below.")
+    df = pd.DataFrame(columns=["filename","x1","y1","x2","y2"])
+
+st.markdown("### Edit / verify coordinates")
+df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+
+st.markdown("---")
+st.markdown("### Enhanced Settings")
+
+cA, cB, cC = st.columns(3)
+with cA:
+    ic_y_is_up = st.toggle("Stage Y is up (typical IC tools)", value=True)
+    bbox_inclusive = st.toggle("BBox (x2,y2) are inclusive", value=False)
+    gap_handling = st.selectbox(
+        "Gap Handling", 
+        ["warn", "estimate", "ignore"],
+        index=0,
+        help="How to handle gaps: warn, estimate from content, or ignore"
+    )
+
+with cB:
+    alignment_method = st.selectbox(
+        "Alignment Method", 
+        ["auto", "phase_correlation", "template_match"],
+        index=0,
+        help="Auto tries phase correlation first, then template matching"
+    )
+    override_scale = st.toggle("Override pixels-per-unit", value=False)
+    ppux = st.number_input("pixels_per_unit_x", value=0.0, min_value=0.0, step=0.001, disabled=not override_scale, format="%.6f")
+    ppuy = st.number_input("pixels_per_unit_y", value=0.0, min_value=0.0, step=0.001, disabled=not override_scale, format="%.6f")
+
+with cC:
+    refine_overlap_px = st.number_input("Refine overlap (px)", value=50, min_value=20, max_value=200, step=5,
+                                       help="For overlapping regions only")
+    blend_mode = st.selectbox("Blend mode", ["feather","overwrite","average"], index=0)
+    feather_ksize = st.slider("Feather kernel (odd)", min_value=31, max_value=151, value=51, step=2)
+    output_color = st.toggle("Output color", value=False)
+
+st.markdown("---")
+run = st.button("🚀 Build Mosaic with Gap Handling")
+
+if run:
+    if df.empty:
+        st.error("Please provide at least one CSV row.")
+        st.stop()
+    missing = [fn for fn in df["filename"].astype(str) if fn not in images_by_name]
+    if missing:
+        st.error(f"Missing PNGs for: {missing[:6]}{' ...' if len(missing)>6 else ''}")
+        st.stop()
+
+    prog = st.progress(0, text="Building mosaic with gap analysis...")
+    def _cb(i, n):
+        prog.progress(int(100*i/n), text=f"Placing tile {i}/{n}")
+
+    try:
+        px_x = ppux if (override_scale and ppux > 0) else None
+        px_y = ppuy if (override_scale and ppuy > 0) else None
+        
+        mosaic, report = build_mosaic_with_gap_handling(
+            df, images_by_name,
+            ic_y_is_up=ic_y_is_up,
+            bbox_inclusive=bbox_inclusive,
+            pixels_per_unit_x=px_x,
+            pixels_per_unit_y=px_y,
+            refine_overlap_px=int(refine_overlap_px),
+            blend_mode=blend_mode,
+            feather_ksize=int(feather_ksize),
+            output_color=output_color,
+            alignment_method=alignment_method,
+            gap_handling=gap_handling,
+            progress_cb=_cb
+        )
+    except Exception as e:
+        st.exception(e)
+        st.stop()
+
+    prog.progress(100, text="Done!")
+
+    # Preview
+    H, W = mosaic.shape[:2]
+    st.markdown("### Mosaic preview")
+    max_side = 1400
+    if max(H, W) > max_side:
+        scale = max_side / max(H, W)
+        preview = cv2.resize(mosaic, (int(W*scale), int(H*scale)), interpolation=cv2.INTER_AREA)
+    else:
+        preview = mosaic
+    st.image(preview, caption=f"Final mosaic: {H} × {W} px", use_column_width=True)
+
+    # Gap Analysis
+    if report["gaps_detected"]:
+        st.markdown("### ⚠️ Gap Analysis Report")
+        st.warning(f"Found {len(report['gaps_detected'])} gaps between tiles!")
+        
+        gap_df = pd.DataFrame(report["gaps_detected"])
+        st.dataframe(gap_df)
+        
+        st.markdown("""
+        **Gap Handling:**
+        - Red borders indicate gaps between tiles
+        - Alignment used coordinate-based positioning
+        - Consider re-capturing with proper overlap for better results
+        """)
+    else:
+        st.success("✅ No significant gaps detected between tiles!")
+
+    # Alignment statistics
+    st.markdown("### Alignment Statistics")
+    methods_count = {}
+    gap_tiles = 0
+    for tile_info in report["tiles"].values():
+        for method in tile_info.get("methods_used", ["coords_only"]):
+            methods_count[method] = methods_count.get(method, 0) + 1
+        if tile_info.get("gap_detected", False):
+            gap_tiles += 1
+    
+    st.write("Alignment methods used:")
+    for method, count in methods_count.items():
+        st.write(f"- **{method}**: {count} tiles")
+    
+    if gap_tiles > 0:
+        st.write(f"- **Tiles with gaps**: {gap_tiles}")
+
+    # Downloads
+    st.markdown("### Download outputs")
+    png_bytes = encode_png(mosaic)
+    if png_bytes:
+        st.download_button("⬇️ Download mosaic.png", data=png_bytes, file_name="mosaic.png", mime="image/png")
+    
+    json_bytes = json.dumps(report, indent=2).encode("utf-8")
+    st.download_button("⬇️ Download detailed_report.json", data=json_bytes, file_name="stitching_report.json", mime="application/json")
+
+    st.markdown("### Build summary")
+    st.write(f"- Final size: **{H} × {W}** pixels")
+    st.write(f"- Pixels-per-unit: **{report['pixels_per_unit_x']:.6f} (x)**, **{report['pixels_per_unit_y']:.6f} (y)**")
+    st.write(f"- Gaps detected: **{len(report['gaps_detected'])}**")
+    st.write(f"- Gap handling: **{report['gap_handling']}**")
+
+st.markdown("---")
+st.markdown("""
+### 🎯 Gap Handling Strategies
+
+**When tiles have gaps (no overlap):**
+
+1. **Coordinate-Based Placement**: Uses stage coordinates only (most reliable)
+2. **Visual Estimation**: Attempts to estimate gap size from image content
+3. **Template Matching**: Fallback method for difficult cases
+
+**For best results:**
+- Capture images with 10-15% overlap when possible
+- Use "warn" mode to identify gaps in your dataset
+- Large gaps (>20 pixels) will use coordinate-based placement
+""")
+
+
+################## 3rd #################3333
+
+import io, math, json
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import streamlit as st
+import cv2
+
+# --------------- Optimized for Metal Line SEM Images ---------------
+def read_png_bytes(file):
+    data = np.frombuffer(file.read(), np.uint8)
+    img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise ValueError(f"Cannot read PNG: {getattr(file, 'name', 'uploaded file')}")
+    return img
+
+def to_gray(img):
+    if img.ndim == 3:
+        if img.shape[2] == 4:
+            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return img
+
+def enhance_metal_lines(img):
+    """Specialized enhancement for metal line SEM images"""
+    gray = to_gray(img) if img.ndim == 3 else img.copy()
+    
+    # Apply aggressive contrast enhancement for metal lines
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+    enhanced = clahe.apply(gray)
+    
+    # Optional: binary threshold to emphasize metal lines
+    _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    return enhanced, binary
+
+def template_match_alignment(ref_region, mov_region, method=cv2.TM_CCOEFF_NORMED):
+    """
+    Template matching for metal line alignment
+    Returns: (success, dx, dy, confidence)
+    """
+    try:
+        # Ensure regions are the same size
+        if ref_region.shape != mov_region.shape:
+            # Resize mov_region to match ref_region
+            mov_region = cv2.resize(mov_region, (ref_region.shape[1], ref_region.shape[0]))
+        
+        # Perform template matching
+        result = cv2.matchTemplate(ref_region, mov_region, method)
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        
+        # Calculate shift - template matching gives the top-left corner of the match
+        dx = max_loc[0] - (mov_region.shape[1] // 2)
+        dy = max_loc[1] - (mov_region.shape[0] // 2)
+        
+        # For metal lines, we need high confidence
+        success = max_val > 0.4  # Higher threshold for structured patterns
+        
+        return success, dx, dy, max_val
+        
+    except Exception as e:
+        return False, 0, 0, 0.0
+
+def edge_based_alignment(ref_region, mov_region, canny_threshold1=50, canny_threshold2=150):
+    """
+    Edge-based alignment using Canny edges + template matching
+    Excellent for metal lines with clear edges
+    """
+    try:
+        # Convert to edges
+        ref_edges = cv2.Canny(ref_region, canny_threshold1, canny_threshold2)
+        mov_edges = cv2.Canny(mov_region, canny_threshold1, canny_threshold2)
+        
+        # If no edges detected, return failure
+        if np.sum(ref_edges) == 0 or np.sum(mov_edges) == 0:
+            return False, 0, 0, 0.0
+        
+        # Template match on edges
+        return template_match_alignment(ref_edges, mov_edges, cv2.TM_CCOEFF_NORMED)
+        
+    except Exception:
+        return False, 0, 0, 0.0
+
+def line_based_alignment(ref_region, mov_region):
+    """
+    Alignment using Hough Lines for metal line structures
+    """
+    try:
+        # Detect lines in both regions
+        ref_edges = cv2.Canny(ref_region, 50, 150, apertureSize=3)
+        mov_edges = cv2.Canny(mov_region, 50, 150, apertureSize=3)
+        
+        # Detect lines using HoughLinesP
+        ref_lines = cv2.HoughLinesP(ref_edges, 1, np.pi/180, threshold=30, minLineLength=20, maxLineGap=10)
+        mov_lines = cv2.HoughLinesP(mov_edges, 1, np.pi/180, threshold=30, minLineLength=20, maxLineGap=10)
+        
+        if ref_lines is None or mov_lines is None or len(ref_lines) < 3 or len(mov_lines) < 3:
+            return False, 0, 0, 0.0
+        
+        # Calculate average line angles to check alignment
+        def get_angles(lines):
+            angles = []
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                angle = np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi
+                angles.append(angle)
+            return np.array(angles)
+        
+        ref_angles = get_angles(ref_lines)
+        mov_angles = get_angles(mov_lines)
+        
+        # Simple angle-based alignment (for mostly horizontal/vertical metal lines)
+        ref_angle_avg = np.mean(ref_angles)
+        mov_angle_avg = np.mean(mov_angles)
+        
+        # If angles are significantly different, alignment might be problematic
+        if abs(ref_angle_avg - mov_angle_avg) > 10:
+            return False, 0, 0, 0.0
+        
+        # Fall back to edge-based alignment
+        return edge_based_alignment(ref_region, mov_region)
+        
+    except Exception:
+        return False, 0, 0, 0.0
+
+def phase_correlation_metal_lines(ref_region, mov_region):
+    """
+    Enhanced phase correlation for structured metal line patterns
+    """
+    try:
+        # Use enhanced images for better correlation
+        ref_enhanced, _ = enhance_metal_lines(ref_region)
+        mov_enhanced, _ = enhance_metal_lines(mov_region)
+        
+        # Apply Hanning window
+        h, w = ref_enhanced.shape
+        win = np.outer(np.hanning(h), np.hanning(w))
+        
+        ref_win = ref_enhanced.astype(np.float32) * win
+        mov_win = mov_enhanced.astype(np.float32) * win
+        
+        # Phase correlation
+        (shifty, shiftx), response = cv2.phaseCorrelate(ref_win, mov_win)
+        
+        # Metal lines should have higher correlation response
+        success = response > 0.15 and abs(shiftx) < w/2 and abs(shifty) < h/2
+        
+        return success, float(shiftx), float(shifty), response
+        
+    except Exception:
+        return False, 0, 0, 0.0
+
+def multi_method_alignment(ref_region, mov_region, methods_to_try=3):
+    """
+    Try multiple alignment methods and pick the best one
+    """
+    best_dx, best_dy = 0, 0
+    best_confidence = 0
+    best_method = "none"
+    
+    methods = [
+        ("edge_based", edge_based_alignment),
+        ("template", lambda r, m: template_match_alignment(r, m, cv2.TM_CCOEFF_NORMED)),
+        ("phase_corr", phase_correlation_metal_lines),
+        ("line_based", line_based_alignment)
+    ]
+    
+    # Try the specified number of methods
+    for method_name, method_func in methods[:methods_to_try]:
+        success, dx, dy, confidence = method_func(ref_region, mov_region)
+        
+        if success and confidence > best_confidence:
+            best_dx, best_dy = dx, dy
+            best_confidence = confidence
+            best_method = method_name
+    
+    return best_method != "none", best_dx, best_dy, best_confidence, best_method
+
+def feather_blend(canvas, tile, x, y, ksize=51):
+    """Feather blending for smooth transitions"""
+    H, W = canvas.shape[:2]
+    h, w = tile.shape[:2]
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(W, x + w), min(H, y + h)
+    if x0 >= x1 or y0 >= y1:
+        return
+    
+    c = canvas[y0:y1, x0:x1]
+    t = tile[y0 - y : y0 - y + (y1 - y0), x0 - x : x0 - x + (x1 - x0)]
+    
+    mask = (t > 0).astype(np.float32)
+    if ksize % 2 == 0: 
+        ksize += 1
+    if ksize > 1:
+        mask = cv2.GaussianBlur(mask, (ksize, ksize), 0)
+    
+    c[:] = (c.astype(np.float32) * (1 - mask) + t.astype(np.float32) * mask).astype(canvas.dtype)
+
+def estimate_scale(df, images_by_name, bbox_inclusive):
+    """Estimate pixels per unit from coordinate data"""
+    sx_list, sy_list = [], []
+    for _, r in df.iterrows():
+        name = str(r["filename"])
+        if name not in images_by_name: 
+            continue
+        img = images_by_name[name]["img"]
+        h, w = img.shape[:2]
+        dx = float(r["x2"]) - float(r["x1"]) + (1 if bbox_inclusive else 0)
+        dy = float(r["y2"]) - float(r["y1"]) + (1 if bbox_inclusive else 0)
+        if dx <= 0 or dy <= 0: 
+            continue
+        sx_list.append(w / dx)
+        sy_list.append(h / dy)
+    
+    if not sx_list or not sy_list:
+        raise RuntimeError("Could not estimate pixels-per-unit — check CSV/images.")
+    
+    return float(np.median(sx_list)), float(np.median(sy_list))
+
+def build_mosaic_metal_lines(
+    df, images_by_name,
+    ic_y_is_up=True,
+    bbox_inclusive=False,
+    pixels_per_unit_x=None,
+    pixels_per_unit_y=None,
+    analysis_size=100,  # Size of region to analyze for alignment
+    min_confidence=0.3,
+    alignment_methods=2,  # Number of methods to try
+    blend_mode="feather",
+    feather_ksize=51,
+    output_color=False,
+    progress_cb=None
+):
+    """Optimized mosaic building for SEM metal line images"""
+    
+    # Validate and prepare data
+    df = df.copy()
+    for col in ["x1","y1","x2","y2"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    
+    if df[["x1","y1","x2","y2"]].isnull().any().any():
+        raise ValueError("CSV contains non-numeric coordinates.")
+
+    # Load and preprocess tiles
+    tiles = []
+    for _, r in df.iterrows():
+        name = str(r["filename"])
+        if name not in images_by_name:
+            raise FileNotFoundError(f"Missing image: {name}")
+        
+        raw = images_by_name[name]["img"]
+        img = raw.copy()
+        
+        # Convert to desired format
+        if output_color:
+            if img.ndim == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            elif img.shape[2] == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        else:
+            img = to_gray(img)
+        
+        h, w = img.shape[:2]
+        x1, y1, x2, y2 = map(float, [r["x1"], r["y1"], r["x2"], r["y2"]])
+        dx = x2 - x1 + (1 if bbox_inclusive else 0)
+        dy = y2 - y1 + (1 if bbox_inclusive else 0)
+        
+        tiles.append({
+            "filename": name, "img": img, "h": h, "w": w, 
+            "x1": x1, "y1": y1, "x2": x2, "y2": y2, 
+            "dx": dx, "dy": dy
+        })
+
+    # Estimate scale
+    if pixels_per_unit_x is None or pixels_per_unit_y is None:
+        sx, sy = estimate_scale(df, images_by_name, bbox_inclusive)
+    else:
+        sx, sy = float(pixels_per_unit_x), float(pixels_per_unit_y)
+
+    # Calculate canvas size
+    xs, ys = [], []
+    for t in tiles:
+        xs += [t["x1"], t["x2"]]
+        ys += [t["y1"], t["y2"]]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+
+    # Map coordinates to canvas
+    for t in tiles:
+        if ic_y_is_up:
+            tly = (ymax - t["y1"]) * sy
+        else:
+            tly = (t["y1"] - ymin) * sy
+        tlx = (t["x1"] - xmin) * sx
+        t["tlx"], t["tly"] = int(round(tlx)), int(round(tly))
+
+    # Create canvas with padding
+    canvas_W = int(math.ceil((xmax - xmin) * sx)) + 200
+    canvas_H = int(math.ceil((ymax - ymin) * sy)) + 200
+    
+    if output_color:
+        canvas = np.zeros((canvas_H, canvas_W, 3), dtype=np.uint8)
+    else:
+        canvas = np.zeros((canvas_H, canvas_W), dtype=np.uint8)
+
+    # Sort tiles by position
+    tiles_sorted = sorted(tiles, key=lambda t: (t["tly"], t["tlx"]))
+    transforms = {}
+    alignment_report = []
+
+    # Helper functions to find neighbors
+    def left_neighbor(t):
+        cands = [u for u in tiles_sorted if u is not t 
+                 and abs(u["tly"] - t["tly"]) < max(t["h"] * 0.3, 150)
+                 and u["tlx"] < t["tlx"]]
+        return max(cands, key=lambda u: u["tlx"]) if cands else None
+
+    def top_neighbor(t):
+        cands = [u for u in tiles_sorted if u is not t 
+                 and abs(u["tlx"] - t["tlx"]) < max(t["w"] * 0.3, 150)
+                 and u["tly"] < t["tly"]]
+        return max(cands, key=lambda u: u["tly"]) if cands else None
+
+    # Place first tile
+    t0 = tiles_sorted[0]
+    feather_blend(canvas, t0["img"], t0["tlx"], t0["tly"], ksize=feather_ksize)
+    transforms[t0["filename"]] = {
+        "dx": 0.0, "dy": 0.0, 
+        "tlx": t0["tlx"], "tly": t0["tly"],
+        "method": "initial", "confidence": 1.0
+    }
+
+    # Place remaining tiles with metal-line optimized alignment
+    for i, t in enumerate(tiles_sorted[1:], start=2):
+        img = t["img"]
+        x_coarse, y_coarse = t["tlx"], t["tly"]
+        
+        dx_total, dy_total = 0.0, 0.0
+        alignment_sources = 0
+        alignment_details = []
+        
+        # Try alignment with left neighbor
+        L = left_neighbor(t)
+        if L is not None:
+            # Use larger analysis regions for metal lines
+            analysis_width = min(analysis_size, t["w"] // 3, L["w"] // 3)
+            analysis_height = min(t["h"], L["h"], 200)  # Limit height for stability
+            
+            # Extract from current tile (left side)
+            mov_region = img[:, :analysis_width]
+            
+            # Extract from canvas where left neighbor should be
+            ref_x0 = L["tlx"] + L["w"] - analysis_width
+            ref_y0 = max(0, min(y_coarse, canvas_H - analysis_height))
+            ref_x1 = ref_x0 + analysis_width
+            ref_y1 = ref_y0 + analysis_height
+            
+            if (0 <= ref_x0 < ref_x1 <= canvas_W and 
+                0 <= ref_y0 < ref_y1 <= canvas_H):
+                
+                ref_region = canvas[ref_y0:ref_y1, ref_x0:ref_x1]
+                
+                if ref_region.size > 0 and mov_region.size > 0:
+                    # Ensure same dimensions
+                    if ref_region.shape != mov_region.shape:
+                        mov_region = cv2.resize(mov_region, (ref_region.shape[1], ref_region.shape[0]))
+                    
+                    # Try multiple alignment methods
+                    success, dx, dy, confidence, method = multi_method_alignment(
+                        ref_region, mov_region, methods_to_try=alignment_methods
+                    )
+                    
+                    if success and confidence >= min_confidence:
+                        dx_total += dx
+                        dy_total += dy
+                        alignment_sources += 1
+                        
+                        alignment_details.append({
+                            "neighbor": "left",
+                            "method": method,
+                            "confidence": confidence,
+                            "dx": dx,
+                            "dy": dy
+                        })
+
+        # Try alignment with top neighbor
+        T = top_neighbor(t)
+        if T is not None:
+            analysis_height = min(analysis_size, t["h"] // 3, T["h"] // 3)
+            analysis_width = min(t["w"], T["w"], 200)
+            
+            mov_region = img[:analysis_height, :]
+            
+            ref_x0 = max(0, min(x_coarse, canvas_W - analysis_width))
+            ref_y0 = T["tly"] + T["h"] - analysis_height
+            ref_x1 = ref_x0 + analysis_width
+            ref_y1 = ref_y0 + analysis_height
+            
+            if (0 <= ref_x0 < ref_x1 <= canvas_W and 
+                0 <= ref_y0 < ref_y1 <= canvas_H):
+                
+                ref_region = canvas[ref_y0:ref_y1, ref_x0:ref_x1]
+                
+                if ref_region.size > 0 and mov_region.size > 0:
+                    if ref_region.shape != mov_region.shape:
+                        mov_region = cv2.resize(mov_region, (ref_region.shape[1], ref_region.shape[0]))
+                    
+                    success, dx, dy, confidence, method = multi_method_alignment(
+                        ref_region, mov_region, methods_to_try=alignment_methods
+                    )
+                    
+                    if success and confidence >= min_confidence:
+                        dx_total += dx
+                        dy_total += dy
+                        alignment_sources += 1
+                        
+                        alignment_details.append({
+                            "neighbor": "top",
+                            "method": method,
+                            "confidence": confidence,
+                            "dx": dx,
+                            "dy": dy
+                        })
+
+        # Calculate final adjustment
+        if alignment_sources > 0:
+            dx_final = dx_total / alignment_sources
+            dy_final = dy_total / alignment_sources
+            avg_confidence = np.mean([d["confidence"] for d in alignment_details])
+        else:
+            dx_final, dy_final = 0.0, 0.0
+            avg_confidence = 0.0
+
+        x_final = int(round(x_coarse + dx_final))
+        y_final = int(round(y_coarse + dy_final))
+        
+        # Place tile
+        feather_blend(canvas, img, x_final, y_final, ksize=feather_ksize)
+        
+        # Record transformation
+        transforms[t["filename"]] = {
+            "dx": float(dx_final), 
+            "dy": float(dy_final), 
+            "tlx": x_final, 
+            "tly": y_final,
+            "method": "metal_line_alignment",
+            "confidence": avg_confidence,
+            "alignments": alignment_details
+        }
+        
+        alignment_report.append({
+            "tile": t["filename"],
+            "alignments": alignment_details,
+            "final_shift": (dx_final, dy_final)
+        })
+
+        if progress_cb:
+            progress_cb(i, len(tiles_sorted))
+
+    # Crop canvas to content
+    non_zero_coords = np.where(canvas > 0)
+    if len(non_zero_coords[0]) > 0:
+        min_y, max_y = np.min(non_zero_coords[0]), np.max(non_zero_coords[0])
+        min_x, max_x = np.min(non_zero_coords[1]), np.max(non_zero_coords[1])
+        canvas = canvas[min_y:max_y+1, min_x:max_x+1]
+        
+        # Update positions
+        for tile_info in transforms.values():
+            tile_info["tlx"] -= min_x
+            tile_info["tly"] -= min_y
+
+    report = {
+        "ic_y_is_up": ic_y_is_up,
+        "bbox_inclusive": bbox_inclusive,
+        "pixels_per_unit_x": sx,
+        "pixels_per_unit_y": sy,
+        "analysis_size": analysis_size,
+        "min_confidence": min_confidence,
+        "alignment_methods": alignment_methods,
+        "alignment_report": alignment_report,
+        "tiles": transforms
+    }
+    
+    return canvas, report
+
+def encode_png(img):
+    """Encode image as PNG bytes"""
+    if img.dtype != np.uint8:
+        img = np.clip(img, 0, 255).astype(np.uint8)
+    ok, buf = cv2.imencode(".png", img)
+    return buf.tobytes() if ok else None
+
+# --------------- Streamlit UI ---------------
+st.set_page_config(page_title="SEM Metal Line Stitcher", layout="wide")
+st.title("🔧 SEM Metal Line Image Stitcher")
+
+st.markdown("""
+**Optimized for SEM IC images with metal lines and clear background**
+- Uses edge detection and template matching
+- Specialized for high-contrast structured patterns
+- Multiple fallback methods for robust alignment
+""")
+
+# File upload
+c1, c2 = st.columns(2)
+with c1:
+    uploaded_imgs = st.file_uploader("Upload SEM PNG tiles", type=["png"], accept_multiple_files=True)
+with c2:
+    csv_file = st.file_uploader("Upload CSV (filename,x1,y1,x2,y2)", type=["csv"])
+
+images_by_name = {}
+if uploaded_imgs:
+    for f in uploaded_imgs:
+        images_by_name[f.name] = {"img": read_png_bytes(f)}
+    st.success(f"Loaded {len(uploaded_imgs)} SEM images")
+
+if csv_file is not None:
+    df = pd.read_csv(csv_file)
+else:
+    st.info("No CSV uploaded yet. Paste or create rows below.")
+    df = pd.DataFrame(columns=["filename","x1","y1","x2","y2"])
+
+st.markdown("### Edit coordinates")
+df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+
+st.markdown("---")
+st.markdown("### Metal Line Alignment Settings")
+
+cA, cB, cC = st.columns(3)
+with cA:
+    ic_y_is_up = st.toggle("Stage Y is up", value=True)
+    bbox_inclusive = st.toggle("BBox (x2,y2) are inclusive", value=False)
+    
+    alignment_methods = st.slider("Methods to try", min_value=1, max_value=4, value=2,
+                                 help="Number of alignment methods to try (edge-based is best)")
+
+with cB:
+    analysis_size = st.slider("Analysis region size", min_value=50, max_value=200, value=100,
+                             help="Size of region used for alignment (pixels)")
+    
+    min_confidence = st.slider("Minimum confidence", min_value=0.1, max_value=0.8, value=0.3, step=0.05,
+                              help="Required confidence for alignment (higher = more strict)")
+    
+    override_scale = st.toggle("Override pixels-per-unit", value=False)
+    ppux = st.number_input("pixels_per_unit_x", value=0.0, format="%.6f", disabled=not override_scale)
+    ppuy = st.number_input("pixels_per_unit_y", value=0.0, format="%.6f", disabled=not override_scale)
+
+with cC:
+    blend_mode = st.selectbox("Blend mode", ["feather"], index=0)
+    feather_ksize = st.slider("Feather kernel", min_value=31, max_value=151, value=51, step=2,
+                             help="Larger values for smoother metal line transitions")
+    output_color = st.toggle("Output color", value=False)
+
+# Preview of metal line enhancement
+if uploaded_imgs and len(uploaded_imgs) > 0:
+    st.markdown("### Metal Line Enhancement Preview")
+    sample_img = list(images_by_name.values())[0]["img"]
+    enhanced, binary = enhance_metal_lines(sample_img)
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.image(sample_img, caption="Original SEM", use_column_width=True)
+    with col2:
+        st.image(enhanced, caption="Enhanced Contrast", use_column_width=True)
+    with col3:
+        st.image(binary, caption="Binary (for alignment)", use_column_width=True)
+
+st.markdown("---")
+run = st.button("🔧 Build Metal Line Mosaic")
+
+if run:
+    if df.empty:
+        st.error("Please provide at least one CSV row.")
+        st.stop()
+    
+    missing = [fn for fn in df["filename"].astype(str) if fn not in images_by_name]
+    if missing:
+        st.error(f"Missing PNGs for: {missing[:6]}{' ...' if len(missing)>6 else ''}")
+        st.stop()
+
+    prog = st.progress(0, text="Aligning metal line patterns...")
+    
+    def _cb(i, n):
+        prog.progress(int(100*i/n), text=f"Processing tile {i}/{n}")
+
+    try:
+        px_x = ppux if (override_scale and ppux > 0) else None
+        px_y = ppuy if (override_scale and ppuy > 0) else None
+        
+        mosaic, report = build_mosaic_metal_lines(
+            df, images_by_name,
+            ic_y_is_up=ic_y_is_up,
+            bbox_inclusive=bbox_inclusive,
+            pixels_per_unit_x=px_x,
+            pixels_per_unit_y=px_y,
+            analysis_size=analysis_size,
+            min_confidence=min_confidence,
+            alignment_methods=alignment_methods,
+            blend_mode=blend_mode,
+            feather_ksize=feather_ksize,
+            output_color=output_color,
+            progress_cb=_cb
+        )
+    except Exception as e:
+        st.exception(e)
+        st.stop()
+
+    prog.progress(100, text="Metal line alignment complete!")
+
+    # Display results
+    H, W = mosaic.shape[:2]
+    st.markdown("### 🎯 Mosaic Result")
+    
+    # Create preview
+    max_side = 1200
+    if max(H, W) > max_side:
+        scale = max_side / max(H, W)
+        preview = cv2.resize(mosaic, (int(W*scale), int(H*scale)), interpolation=cv2.INTER_NEAREST)
+    else:
+        preview = mosaic
+    
+    st.image(preview, caption=f"Metal Line Mosaic: {W} × {H} pixels", use_column_width=True)
+
+    # Alignment statistics
+    st.markdown("### 📊 Metal Line Alignment Report")
+    
+    total_alignments = 0
+    successful_alignments = 0
+    method_counts = {}
+    total_confidence = 0.0
+    
+    for tile_report in report["alignment_report"]:
+        if tile_report["alignments"]:
+            successful_alignments += 1
+            total_alignments += len(tile_report["alignments"])
+            for align in tile_report["alignments"]:
+                method = align["method"]
+                method_counts[method] = method_counts.get(method, 0) + 1
+                total_confidence += align["confidence"]
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Tiles Processed", len(df))
+    with col2:
+        st.metric("Successful Alignments", successful_alignments)
+    with col3:
+        if total_alignments > 0:
+            avg_confidence = total_confidence / total_alignments
+            st.metric("Avg Confidence", f"{avg_confidence:.3f}")
+        else:
+            st.metric("Avg Confidence", "0.000")
+    with col4:
+        st.metric("Analysis Size", f"{report['analysis_size']}px")
+
+    # Method effectiveness
+    if method_counts:
+        st.markdown("#### Alignment Method Effectiveness")
+        for method, count in method_counts.items():
+            st.write(f"- **{method}**: {count} successful alignments")
+
+    # Download section
+    st.markdown("### 📥 Download Results")
+    png_bytes = encode_png(mosaic)
+    if png_bytes:
+        st.download_button("⬇️ Download Metal Line Mosaic", data=png_bytes, 
+                         file_name="metal_line_mosaic.png", mime="image/png")
+    
+    json_bytes = json.dumps(report, indent=2).encode("utf-8")
+    st.download_button("⬇️ Download Alignment Report", data=json_bytes,
+                     file_name="metal_line_report.json", mime="application/json")
+
+    # Detailed report
+    with st.expander("🔍 Detailed Alignment Analysis"):
+        for tile_report in report["alignment_report"]:
+            st.write(f"**{tile_report['tile']}**")
+            if tile_report["alignments"]:
+                for align in tile_report["alignments"]:
+                    st.write(f"  - {align['neighbor']} neighbor: {align['method']} "
+                           f"(confidence: {align['confidence']:.3f}, "
+                           f"shift: ({align['dx']:.1f}, {align['dy']:.1f}))")
+            else:
+                st.write("  - No successful alignments (used coordinate-based placement)")
+
+st.markdown("---")
+st.markdown("""
+### 🎯 Why This Works Better for Metal Lines
+
+**Traditional feature detection fails because:**
+- Metal lines create repetitive patterns
+- ORB/SIFT can't find distinctive keypoints
+- Too many similar features cause mismatches
+
+**Our metal-line optimized approach:**
+1. **Edge-Based Alignment**: Uses Canny edges + template matching
+2. **Template Matching**: Direct pixel pattern matching
+3. **Phase Correlation**: For periodic structures
+4. **Line Detection**: Hough lines for structured patterns
+
+### 💡 Recommended Settings for SEM Metal Lines
+
+- **Analysis Size**: 80-120 pixels (captures multiple metal lines)
+- **Methods to Try**: 2-3 (edge-based + template matching)
+- **Min Confidence**: 0.3-0.5 (metal lines give clear signals)
+- **Feather Kernel**: 51+ (smooth metal line transitions)
+
+### 🔧 Troubleshooting
+
+**If alignment fails:**
+- Increase analysis region size
+- Try more alignment methods  
+- Lower minimum confidence slightly
+- Check that metal lines are visible in overlap regions
+""")
