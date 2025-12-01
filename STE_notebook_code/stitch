@@ -1707,3 +1707,514 @@ st.markdown("""
 - Lower minimum confidence slightly
 - Check that metal lines are visible in overlap regions
 """)
+
+
+
+
+################################ Here is the app1.py###################################
+
+
+import os
+import cv2
+import numpy as np
+import pandas as pd
+import json
+import streamlit as st
+from PIL import Image, ImageFile
+
+# Allow very large images
+Image.MAX_IMAGE_PIXELS = None
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+
+# =========================
+# Image I/O
+# =========================
+def decode_images(uploaded):
+    images = {}
+    for f in uploaded:
+        file_bytes = f.getvalue()
+        npbuf = np.frombuffer(file_bytes, dtype=np.uint8)
+        img = cv2.imdecode(npbuf, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            st.error(f"Could not decode {f.name}.")
+            st.stop()
+        images[f.name] = img
+    return images
+
+
+# =========================
+# Coordinate Utilities
+# =========================
+def y_mode_autodetect(coords: pd.DataFrame) -> str:
+    """
+    Try to infer Y direction from data.
+    If majority of tiles have y1 < y0 OR typical ys are negative, we assume IC Explorer (down decreases).
+    Otherwise, assume image convention (down increases).
+    Returns: 'ic' or 'image'
+    """
+    if len(coords) == 0:
+        return 'ic'
+    ratio = (coords.eval("y1 < y0").mean() if {'y0', 'y1'}.issubset(coords.columns) else 0)
+    median_y = np.median(pd.concat([coords['y0'], coords['y1']]))
+    if (ratio > 0.5) or (median_y < 0):
+        return 'ic'
+    return 'image'
+
+
+def compute_world_extents(coords: pd.DataFrame):
+    """
+    Robust extents considering that x0/x1 and y0/y1 might be unordered.
+    """
+    x_lefts = np.minimum(coords['x0'].values, coords['x1'].values)
+    x_rights = np.maximum(coords['x0'].values, coords['x1'].values)
+    y_tops_world = np.maximum(coords['y0'].values, coords['y1'].values)   # world top edge (larger Y)
+    y_bottoms_world = np.minimum(coords['y0'].values, coords['y1'].values) # world bottom edge (smaller Y)
+
+    min_x = float(x_lefts.min())
+    max_x = float(x_rights.max())
+    min_y = float(y_bottoms_world.min())
+    max_y = float(y_tops_world.max())
+    return min_x, max_x, min_y, max_y
+
+
+def cluster_1d(values: np.ndarray, tol: float) -> np.ndarray:
+    """
+    Simple 1D clustering by proximity. Values within 'tol' of each other
+    collapse to the cluster mean. Returns new array of snapped values.
+    """
+    if len(values) == 0:
+        return values
+
+    order = np.argsort(values)
+    vals_sorted = values[order]
+    clusters = []
+    current = [vals_sorted[0]]
+    for v in vals_sorted[1:]:
+        # If close enough to last item in current cluster
+        if abs(v - current[-1]) <= tol:
+            current.append(v)
+        else:
+            clusters.append(current)
+            current = [v]
+    clusters.append(current)
+
+    centers = np.array([np.mean(c) for c in clusters], dtype=float)
+
+    # Map each original value to nearest center within tol; if no center within tol, keep value.
+    snapped = np.empty_like(values, dtype=float)
+    centers_sorted = np.sort(centers)
+    for i, v in enumerate(values):
+        idx = np.argmin(np.abs(centers_sorted - v))
+        if abs(centers_sorted[idx] - v) <= tol:
+            snapped[i] = centers_sorted[idx]
+        else:
+            snapped[i] = v
+    return snapped
+
+
+def apply_snapping(coords_df: pd.DataFrame, y_mode: str, snap_rows: bool, snap_cols: bool, tol: float) -> pd.DataFrame:
+    """
+    Snap rows and/or columns to align edges within a given world tolerance.
+    Snapping is applied to top edges (y-top) and left edges (x-left) and preserves tile width/height.
+    """
+    if not (snap_rows or snap_cols):
+        return coords_df
+    df = coords_df.copy()
+    x0 = df['x0'].astype(float).to_numpy()
+    x1 = df['x1'].astype(float).to_numpy()
+    y0 = df['y0'].astype(float).to_numpy()
+    y1 = df['y1'].astype(float).to_numpy()
+
+    widths = np.abs(x1 - x0)
+    heights = np.abs(y1 - y0)
+
+    x_left = np.minimum(x0, x1)
+    # Define world "top" consistently:
+    if y_mode == 'ic':
+        y_top = np.maximum(y0, y1)  # larger Y is visually "higher"
+    else:  # image
+        y_top = np.minimum(y0, y1)  # smaller Y is visually "higher"
+
+    if snap_cols:
+        x_left_snapped = cluster_1d(x_left, tol)
+    else:
+        x_left_snapped = x_left
+
+    if snap_rows:
+        y_top_snapped = cluster_1d(y_top, tol)
+    else:
+        y_top_snapped = y_top
+
+    # Rebuild x0/x1, y0/y1 preserving width/height and y-direction convention
+    x0_new = x_left_snapped
+    x1_new = x0_new + widths  # place to the right (increasing X)
+
+    if y_mode == 'ic':
+        y0_new = y_top_snapped                     # top
+        y1_new = y_top_snapped - heights           # bottom (more negative)
+    else:
+        y0_new = y_top_snapped                     # top
+        y1_new = y_top_snapped + heights           # bottom (larger positive)
+
+    df['x0'] = x0_new
+    df['x1'] = x1_new
+    df['y0'] = y0_new
+    df['y1'] = y1_new
+    return df
+
+
+def compute_world_per_pixel_scales(images: dict, coords: pd.DataFrame):
+    """
+    Estimate world-per-pixel (WPP) scale from the provided images and their world extents.
+    Returns (wpp_x, wpp_y, num_used).
+    If cannot estimate, returns (1.0, 1.0, 0).
+    """
+    sx_list = []
+    sy_list = []
+    used = 0
+    for _, row in coords.iterrows():
+        fname = row['filename']
+        if fname not in images:
+            continue
+        img = images[fname]
+        ih, iw = img.shape[:2]
+        w_world = abs(float(row['x1']) - float(row['x0']))
+        h_world = abs(float(row['y1']) - float(row['y0']))
+        if iw > 0 and ih > 0 and w_world > 0 and h_world > 0:
+            sx_list.append(w_world / iw)  # world units per pixel
+            sy_list.append(h_world / ih)
+            used += 1
+
+    if used == 0:
+        return 1.0, 1.0, 0
+
+    wpp_x = float(np.median(sx_list))
+    wpp_y = float(np.median(sy_list))
+    if wpp_x <= 0 or wpp_y <= 0 or not np.isfinite(wpp_x) or not np.isfinite(wpp_y):
+        return 1.0, 1.0, 0
+    return wpp_x, wpp_y, used
+
+
+# =========================
+# Merging / Placement
+# =========================
+def merge_images(
+    images: dict,
+    coords: pd.DataFrame,
+    y_mode: str = 'ic',
+    assume_one_to_one: bool = True,
+    world_per_pixel_x: float = 1.0,
+    world_per_pixel_y: float = 1.0,
+    clip_out_of_bounds: bool = True,
+):
+    """
+    Merge images according to world coordinates.
+
+    y_mode:
+      - 'ic'    : world Y decreases downward (IC Explorer)
+      - 'image' : world Y increases downward (typical image coords)
+
+    If assume_one_to_one is True: 1 world unit == 1 pixel.
+    Otherwise, use provided world_per_pixel_x/y (WPP). Canvas size and tile sizes
+    are computed as world_span / WPP and abs(tile_world_size) / WPP respectively.
+    """
+
+    if len(coords) == 0:
+        raise ValueError("No coordinates provided.")
+
+    # Robust world extents
+    min_x, max_x, min_y, max_y = compute_world_extents(coords)
+
+    # Choose scale
+    if assume_one_to_one:
+        wpp_x = 1.0
+        wpp_y = 1.0
+    else:
+        wpp_x = float(world_per_pixel_x)
+        wpp_y = float(world_per_pixel_y)
+        if wpp_x <= 0 or wpp_y <= 0:
+            raise ValueError("Invalid world_per_pixel scale. Must be > 0.")
+
+    # Canvas size in pixels
+    W = int(round((max_x - min_x) / wpp_x))
+    H = int(round((max_y - min_y) / wpp_y))
+    if W <= 0 or H <= 0:
+        raise ValueError(f"Computed non-positive canvas size: W={W}, H={H}. Check coordinates/scales.")
+
+    canvas = np.full((H, W), 0, dtype=np.uint8)
+    placements = []
+
+    # Place tiles
+    for _, row in coords.iterrows():
+        fname = row['filename']
+        if fname not in images:
+            continue
+        img = images[fname]
+        ih, iw = img.shape[:2]
+
+        x0 = float(row['x0']); x1 = float(row['x1'])
+        y0 = float(row['y0']); y1 = float(row['y1'])
+
+        # World left/top edges and sizes
+        world_x_left = min(x0, x1)
+        world_x_right = max(x0, x1)
+        world_w = world_x_right - world_x_left
+
+        # Define world "top" consistently
+        if y_mode == 'ic':
+            world_y_top = max(y0, y1)      # larger Y is nearer the top of the image
+            world_h = abs(y1 - y0)         # positive height
+            # Map world top edge to canvas y:
+            # canvas y increases downward; world top max_y should map to 0.
+            # So y_top_px = (max_y - world_y_top) / wpp_y
+            y_top_px = int(round((max_y - world_y_top) / wpp_y))
+        else:
+            world_y_top = min(y0, y1)      # smaller Y is nearer the top of the image
+            world_h = abs(y1 - y0)
+            # For image-mode, top is min_y and increases downward:
+            # y_top_px = (world_y_top - min_y) / wpp_y
+            y_top_px = int(round((world_y_top - min_y) / wpp_y))
+
+        x_left_px = int(round((world_x_left - min_x) / wpp_x))
+        w_px = int(round(world_w / wpp_x))
+        h_px = int(round(world_h / wpp_y))
+
+        if w_px <= 0 or h_px <= 0:
+            # Skip degenerate tiles
+            continue
+
+        # If the input image doesn't match target placement size, resize
+        if (iw, ih) != (w_px, h_px):
+            img_resized = cv2.resize(img, (w_px, h_px), interpolation=cv2.INTER_AREA)
+        else:
+            img_resized = img
+
+        # Compute target box
+        x_end = x_left_px + w_px
+        y_end = y_top_px + h_px
+
+        if clip_out_of_bounds:
+            # Clip to canvas
+            x0c, x1c = max(0, x_left_px), min(W, x_end)
+            y0c, y1c = max(0, y_top_px), min(H, y_end)
+            if x1c > x0c and y1c > y0c:
+                sub = img_resized[(y0c - y_top_px):(y1c - y_top_px), (x0c - x_left_px):(x1c - x_left_px)]
+                canvas[y0c:y1c, x0c:x1c] = sub
+        else:
+            # May raise if out of bounds
+            canvas[y_top_px:y_end, x_left_px:x_end] = img_resized
+
+        placements.append({
+            "filename": fname,
+            # Pixel (canvas) placement (exclusive)
+            "px_x0": int(x_left_px), "px_y0": int(y_top_px),
+            "px_x1": int(x_left_px + w_px), "px_y1": int(y_top_px + h_px),
+            # World bbox (raw)
+            "world_x0": float(world_x_left),
+            "world_y_top": float(world_y_top),
+            "world_x1": float(world_x_left + world_w),
+            "world_y_bottom": float(world_y_top - world_h) if y_mode == 'ic' else float(world_y_top + world_h),
+            # Sizes
+            "tile_w_px": int(w_px), "tile_h_px": int(h_px),
+            "tile_w_world": float(world_w), "tile_h_world": float(world_h),
+        })
+
+    meta = {
+        "world_bbox_raw": {"x0": float(min_x), "y0": float(min_y), "x1": float(max_x), "y1": float(max_y)},
+        "pixel_bbox_exclusive": {"x0": 0, "y0": 0, "x1": int(W), "y1": int(H)},
+        "y_mode": y_mode,
+        "scaling": {
+            "assume_one_to_one": bool(assume_one_to_one),
+            "world_per_pixel_x": float(wpp_x),
+            "world_per_pixel_y": float(wpp_y),
+            "note": "If assume_one_to_one is True, each world unit is treated as one pixel."
+        },
+        "mapping": {
+            "x_left_px": "(world_x_left - min_x) / wpp_x",
+            "y_top_px":  "ic: (max_y - world_y_top) / wpp_y; image: (world_y_top - min_y) / wpp_y",
+            "width_px":  "world_w / wpp_x",
+            "height_px": "world_h / wpp_y",
+        }
+    }
+
+    # Generate a safe-sized preview (downscale so max side ~3000 px)
+    max_side_target = 3000
+    ds = max(1, int(np.ceil(max(W, H) / max_side_target)))
+    preview = cv2.resize(
+        canvas,
+        (max(1, W // ds), max(1, H // ds)),
+        interpolation=cv2.INTER_AREA
+    )
+
+    return canvas, preview, placements, meta
+
+
+def convert_to_native(obj):
+    if isinstance(obj, dict):
+        return {k: convert_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_native(v) for v in obj]
+    elif isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    else:
+        return obj
+
+
+# =========================
+# Streamlit App
+# =========================
+st.set_page_config(page_title="SEM Mosaic Builder (IC Explorer Aware)", layout="wide")
+st.title("SEM Mosaic Builder with World-Coordinate Alignment (IC Explorer Aware)")
+
+uploaded_images = st.file_uploader("Upload grayscale SEM images", accept_multiple_files=True)
+
+coord_mode = st.radio("Coordinate Input Mode", ["Manual Entry", "Upload CSV"], horizontal=True)
+
+coords_df = None
+if uploaded_images:
+    image_names = [f.name for f in uploaded_images]
+
+    if coord_mode == "Manual Entry":
+        st.markdown("### Enter Coordinates for Each Image")
+        rows = []
+        for i, name in enumerate(image_names):
+            with st.expander(f"{name}", expanded=(i == 0)):
+                x0 = st.number_input(f"x0_{i}", value=0.0, step=1.0)
+                y0 = st.number_input(f"y0_{i}", value=0.0, step=1.0)
+                x1 = st.number_input(f"x1_{i}", value=512.0, step=1.0)
+                y1 = st.number_input(f"y1_{i}", value=512.0, step=1.0)
+                rows.append({"filename": name, "x0": x0, "y0": y0, "x1": x1, "y1": y1})
+        coords_df = pd.DataFrame(rows)
+    else:
+        uploaded_csv = st.file_uploader("Upload CSV with coordinates", type="csv")
+        if uploaded_csv:
+            tmp = pd.read_csv(uploaded_csv)
+            required = {'filename', 'x0', 'y0', 'x1', 'y1'}
+            if not required.issubset(tmp.columns):
+                st.error("CSV must contain columns: filename, x0, y0, x1, y1")
+                st.stop()
+            coords_df = tmp.copy()
+
+if coords_df is not None and len(coords_df) > 0:
+    st.markdown("### Alignment Parameters")
+
+    # Y-axis direction
+    y_mode_choice = st.radio(
+        "Y axis direction",
+        ["Auto-detect (IC Explorer likely)", "Down decreases (IC Explorer)", "Down increases (Image default)"],
+        index=1,  # default to IC Explorer
+        help=(
+            "IC Explorer uses a coordinate system where Y decreases as you go down. "
+            "Image pixel coordinates increase Y downward."
+        )
+    )
+
+    if y_mode_choice.startswith("Auto"):
+        y_mode = y_mode_autodetect(coords_df)
+        st.caption(f"Auto-detected Y mode: **{'IC Explorer (down decreases)' if y_mode == 'ic' else 'Image (down increases)'}**")
+    elif y_mode_choice.startswith("Down decreases"):
+        y_mode = 'ic'
+    else:
+        y_mode = 'image'
+
+    # Snapping (row/column normalization)
+    with st.expander("Row/Column Snapping (normalize to align)", expanded=False):
+        snap_rows = st.checkbox("Snap Rows (align Y tops)", value=False)
+        snap_cols = st.checkbox("Snap Columns (align X lefts)", value=False)
+        snap_tol = st.number_input(
+            "Snap tolerance (world units)",
+            min_value=0.0, value=2.0, step=0.5,
+            help="Values within this world-unit tolerance collapse to a shared line."
+        )
+        if snap_rows or snap_cols:
+            coords_snapped = apply_snapping(coords_df, y_mode=y_mode, snap_rows=snap_rows, snap_cols=snap_cols, tol=snap_tol)
+        else:
+            coords_snapped = coords_df.copy()
+    coords_to_use = coords_snapped
+
+    # Scaling options
+    with st.expander("Scaling (world units vs pixels)", expanded=False):
+        assume_one_to_one = st.checkbox("Assume 1 world unit == 1 pixel", value=True)
+        if not assume_one_to_one:
+            images_map = decode_images(uploaded_images)
+            wpp_x, wpp_y, used = compute_world_per_pixel_scales(images_map, coords_to_use)
+            st.caption(f"Estimated world-per-pixel (median) from {used} tiles: "
+                       f"wpp_x={wpp_x:.6g}, wpp_y={wpp_y:.6g}")
+            # Allow override
+            world_per_pixel_x = st.number_input("World units per pixel (X)", value=float(wpp_x), min_value=1e-9, step=1e-6, format="%.9f")
+            world_per_pixel_y = st.number_input("World units per pixel (Y)", value=float(wpp_y), min_value=1e-9, step=1e-6, format="%.9f")
+        else:
+            world_per_pixel_x, world_per_pixel_y = 1.0, 1.0
+
+    st.markdown("### Output")
+    write_png = st.checkbox("Save PNG", value=True)
+    write_tiff = st.checkbox("Save BigTIFF", value=False)
+    base_name = st.text_input("Base Name", value="mosaic")
+    output_dir = st.text_input("Output Directory", value="output")
+
+    if st.button("Merge Images", type="primary", use_container_width=False):
+        os.makedirs(output_dir, exist_ok=True)
+
+        images = decode_images(uploaded_images)
+
+        try:
+            canvas, preview, placements, meta = merge_images(
+                images=images,
+                coords=coords_to_use,
+                y_mode=y_mode,
+                assume_one_to_one=assume_one_to_one,
+                world_per_pixel_x=world_per_pixel_x,
+                world_per_pixel_y=world_per_pixel_y,
+                clip_out_of_bounds=True,
+            )
+        except Exception as e:
+            st.error(f"Failed to merge: {e}")
+            st.stop()
+
+        saved_paths = []
+
+        # Save outputs
+        if write_png:
+            png_path = os.path.join(output_dir, f"{base_name}.png")
+            try:
+                cv2.imwrite(png_path, canvas)
+                saved_paths.append(png_path)
+            except Exception as e:
+                st.warning(f"Failed to write PNG: {e}")
+
+        if write_tiff:
+            try:
+                import tifffile
+                tiff_path = os.path.join(output_dir, f"{base_name}.tif")
+                # Use tiling to avoid huge single-strip TIFFs
+                tifffile.imwrite(tiff_path, canvas, bigtiff=True, tile=(512, 512), compression="zlib")
+                saved_paths.append(tiff_path)
+            except Exception as e:
+                st.warning(f"Failed to write BigTIFF: {e}")
+
+        meta_path = os.path.join(output_dir, f"{base_name}_meta.json")
+        try:
+            with open(meta_path, "w") as f:
+                json.dump(convert_to_native(meta), f, indent=2)
+            saved_paths.append(meta_path)
+        except Exception as e:
+            st.warning(f"Failed to write metadata JSON: {e}")
+
+        csv_path = os.path.join(output_dir, f"{base_name}_placements.csv")
+        try:
+            pd.DataFrame(placements).to_csv(csv_path, index=False)
+            saved_paths.append(csv_path)
+        except Exception as e:
+            st.warning(f"Failed to write placements CSV: {e}")
+
+        st.success("Mosaic created and saved.")
+        for p in saved_paths:
+            st.write(f"Saved: `{p}`")
+
+        st.image(preview, caption="Preview (downsampled)", clamp=True, channels="GRAY")
+        st.json(meta)
+
+else:
+    st.info("Upload images to begin.")
+
