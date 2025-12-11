@@ -1681,3 +1681,86 @@ def plot_pgm_result(res_df, design_id, title_suffix=""):
 # print("DG metrics:", mets_dg)
 # plot_pgm_result(res_dg, pgm_id, "Die-level")
 
+
+##############################
+def plot_ml_ramp_for_group(
+    df_norm,                # e.g. wg_norm_wcat
+    ramp_dict,              # e.g. wg_weighted_cat_ramps
+    rf_model,               # e.g. rf_wg
+    rf_feature_cols,        # e.g. wg_rf_features
+    rf_cat_cols,            # e.g. wg_rf_cat_cols
+    group_cols,             # ["Fab","WaferGrade","Category"]
+    key                     # e.g. ("F11","WG1","Compute")
+):
+    """
+    Show Actual vs Baseline ramp vs ML-corrected ramp
+    for one wafer-level group (Fab, WaferGrade, Category).
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if key not in ramp_dict:
+        raise ValueError(f"Key {key} not in ramp_dict")
+
+    # 1) Filter this group's data
+    g = df_norm.copy()
+    for col, val in zip(group_cols, key):
+        g = g[g[col] == val]
+
+    if g.empty:
+        raise ValueError(f"No rows in df_norm for key={key}")
+
+    g = g.sort_values("NormWeek")
+
+    t       = g["NormWeek"].to_numpy()
+    y_true  = _yield_to_unit_interval(g["Yield"].to_numpy())
+
+    # 2) Baseline logistic ramp for this group
+    rp      = ramp_dict[key]
+    L, k, t0 = rp["L"], rp["k"], rp["t0"]
+    y_ramp  = logistic_curve(t, L, k, t0)
+
+    # 3) ML residual prediction (same features as used in training)
+    #    - Encode categories
+    g_enc = encode_categories(g.copy(), rf_cat_cols)
+    X     = g_enc[rf_feature_cols].to_numpy()
+    resid = rf_model.predict(X)
+    y_ml  = np.clip(y_ramp + resid, 0.0, 1.0)
+
+    # 4) Plot
+    plt.figure(figsize=(7,4))
+    plt.plot(t, y_true, "ko-", label="Actual")
+    plt.plot(t, y_ramp, "g--", label="Baseline ramp")
+    plt.plot(t, y_ml,  "r-.", label="ML ramp (ramp + RF)")
+    plt.xlabel("NormWeek")
+    plt.ylabel("Yield")
+    plt.title(f"ML ramp for group {key}")
+    plt.ylim(0, 1.05)
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+wg_norm_wcat, wg_weighted_cat_ramps = train_ramp_profiles(
+    wg_train,
+    group_cols=["Fab","WaferGrade","Category"],
+    weighted=True,
+    label="[WG weighted+Category]"
+)
+
+rf_wg, wg_rf_features, wg_rf_cat_cols = train_global_residual_rf(
+    wg_norm_wcat,
+    wg_weighted_cat_ramps,
+    group_cols_for_ramp=["Fab","WaferGrade","Category"]
+)
+key_wg = ("F11", "WG1", "Compute")   # put your real (Fab, WG, Category) here
+
+plot_ml_ramp_for_group(
+    df_norm        = wg_norm_wcat,
+    ramp_dict      = wg_weighted_cat_ramps,
+    rf_model       = rf_wg,
+    rf_feature_cols= wg_rf_features,
+    rf_cat_cols    = wg_rf_cat_cols,
+    group_cols     = ["Fab","WaferGrade","Category"],
+    key            = key_wg
+)
+
+
