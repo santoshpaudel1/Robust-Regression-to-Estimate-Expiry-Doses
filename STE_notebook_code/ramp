@@ -1098,3 +1098,46 @@ ml_dg = train_ml_residual_models(df_norm_dg, ramp_dg, group_cols_dg)
 # print("Metrics:", metrics)
 # plot_ramps(res_df, title=f"DG {example_key}")
 
+
+//////// category mapping ###########
+
+# I will use a mockup list for now.
+compute_list = [
+    "Z22A", "Y53A", "Z01C", "Z42B", "Z01B", "Z11B", "Z21C", "T73A", "U88B", "T66A", "Y7CA",
+    "V88A", "Z01A", "Y4CA", "Y53B", "Z10B", "V91A", "Z41C", "Y72U", "Y62E", "Y83C", "Y32B",
+    "Z40B", "Y5CB", "Y52K", "T67A", "V00H", "U87B", "Z90B", "Z32D", "Z00B", "Y63C", "Y72B",
+    "V89C", "Y62C", "Y32A", "Z20A", "U69A", 
+    # ✅ ADDED: Missing Design_IDs (all Compute based on suffix pattern)
+    "9B5A", "9B5B", "E5CA", "E5CB", "Y66A"
+]
+
+graphics_list = [
+    "T6BG", "T62G", "Y21G", "Y21H", "Z10G", "T7CG", "Y01G", "Y31J", "Z11G", "T51G", "Y31H", "Y31G"
+]
+
+low_power_list = [
+    "Y6BM", "Y5BP", "Z1AM", "Z42N", "Z11M", "Z20M", "T6CM", "Y52N", "Y5BN", "Z32M", "Y63N", "Z41M",
+    "Z10N", "U98M", "Z41P", "Y73Q", "DD22Y", "Z11N", "Y42M", "Y62Q", "T67M", "T89M", "Y31M", "U07M",
+    "T63M", "2E0E", "Y31N", "Z21N", "T7CM", "Y2BM", "V01M", "Z3BM", "T53M", "Z42M", "U08M", "Y62P",
+    "Z00M", "T68M", "Y6CP", "U80M", "Y52P", "Y73P", "2E0F", "T62M", "Z01M", "Y4BM", "Z31P", "Z21M",
+    "Z19M", "Y52M", "Z4BM", "Z31M", "Z00N", "T73M", "Z41N", "DD18K", "Z2BM", "U97M", "Y52Q", "Y21N"
+]
+
+did_to_biz = {}
+
+for did in compute_list:
+    did_to_biz[did] = "Compute"
+for did in graphics_list:
+    did_to_biz[did] = "Graphics"
+for did in low_power_list:
+    did_to_biz[did] = "Low Power"
+
+def get_biz_category(did):
+    return did_to_biz.get(did, "Unknown")
+
+ actuals_df['category'] = actuals_df['Design_ID'].map(did_to_biz).fillna('Unknown')
+
+and for configuration : 
+# Import config (ensure config.py exists in parent directory)
+import config
+pgm_dids = config.pgm_design_ids
