@@ -335,3 +335,339 @@ if __name__ == "__main__":
 
     print("Metrics for design", target_design, ":", metrics)
     print(result_df.head())
+
+
+
+
+
+#######################xxx###########################
+
+import numpy as np
+import pandas as pd
+from scipy.optimize import curve_fit
+from sklearn.ensemble import RandomForestRegressor
+from math import sqrt
+import matplotlib.pyplot as plt
+
+plt.rcParams["figure.figsize"] = (8, 5)
+plt.rcParams["axes.grid"] = True
+
+# ============================================================
+# 1. Logistic ramp utilities
+# ============================================================
+
+def logistic_curve(t, L, k, t0):
+    """
+    Logistic curve:
+        t  : time (e.g. normalized week index)
+        L  : asymptotic (target) yield
+        k  : growth rate (steepness)
+        t0 : midpoint (time when yield ~ L/2)
+    """
+    t = np.asarray(t, dtype=float)
+    return L / (1.0 + np.exp(-k * (t - t0)))
+
+
+def fit_logistic(weeks, yields, weights=None):
+    """
+    Fit logistic ramp to (weeks, yields).
+
+    weeks   : 1D array of normalized weeks
+    yields  : 1D array of yields (0..1)
+    weights : optional 1D array (e.g. Volume). Higher weight = more influence.
+
+    Returns: (L, k, t0)
+    """
+    weeks = np.asarray(weeks, dtype=float)
+    yields = np.asarray(yields, dtype=float)
+
+    # sort & drop NaNs
+    order = np.argsort(weeks)
+    weeks, yields = weeks[order], yields[order]
+    good = np.isfinite(weeks) & np.isfinite(yields)
+    weeks, yields = weeks[good], yields[good]
+
+    if len(weeks) < 5 or np.nanmax(yields) < 1e-3:
+        raise RuntimeError("Not enough points to fit")
+
+    # crude initial guesses
+    L0 = float(np.clip(np.percentile(yields, 95), 0.6, 1.0))
+    spread = max(np.ptp(weeks), 1.0)
+    k0 = float(np.clip(1.0 / spread, 0.05, 2.0))
+    t0 = float(np.median(weeks))
+    p0 = np.array([L0, k0, t0], dtype=float)
+
+    # bounds
+    lb = np.array([0.10, 0.01, -50.0], dtype=float)
+    ub = np.array([1.50, 3.00,  50.0], dtype=float)
+
+    # convert weights -> sigma for curve_fit (1/sigma^2 = weight)
+    sigma = None
+    if weights is not None:
+        w = np.asarray(weights, dtype=float)[order][good]
+        w = np.clip(w, 1.0, None)       # avoid zero
+        sigma = 1.0 / np.sqrt(w)
+
+    popt, _ = curve_fit(
+        logistic_curve,
+        weeks,
+        yields,
+        p0=p0,
+        bounds=(lb, ub),
+        sigma=sigma,
+        absolute_sigma=False,
+        method="trf",
+    )
+    return tuple(map(float, popt))
+
+
+# ============================================================
+# 2. Build base & volume-weighted ramp profiles
+# ============================================================
+
+def add_normweek(df):
+    """
+    Add NormWeek (per Design_ID) so each design's earliest WeekIndex is 0.
+    """
+    df = df.copy()
+    df["NormWeek"] = df.groupby("Design_ID")["WeekIndex"].transform(
+        lambda x: x - x.min()
+    )
+    return df
+
+
+def build_ramp_profiles(df):
+    """
+    For each (Design_ID, WaferGrade, DieGrade):
+      - base model    : logistic fit without weights
+      - weighted      : logistic fit weighted by Volume
+
+    Returns:
+        df_norm           : df with NormWeek
+        base_profiles     : dict[(Design_ID, WaferGrade, DieGrade)] -> (L, k, t0)
+        weighted_profiles : same structure
+    """
+    df_norm = add_normweek(df)
+
+    base_profiles = {}
+    weighted_profiles = {}
+
+    group_cols = ["Design_ID", "WaferGrade", "DieGrade"]
+
+    for key, g in df_norm.groupby(group_cols):
+        g = g[(g["Volume"] > 0) & np.isfinite(g["Yield"])].copy()
+        if len(g) < 5:
+            continue
+
+        weeks   = g["NormWeek"].to_numpy()
+        yields  = g["Yield"].to_numpy()
+        volumes = g["Volume"].to_numpy()
+
+        # ---------- base (unweighted) ----------
+        try:
+            L, k, t0 = fit_logistic(weeks, yields, weights=None)
+            base_profiles[key] = (L, k, t0)
+        except Exception:
+            base_profiles[key] = (0.8, 0.5, 10.0)   # simple fallback
+
+        # ---------- volume-weighted ----------
+        try:
+            Lw, kw, t0w = fit_logistic(weeks, yields, weights=volumes)
+            weighted_profiles[key] = (Lw, kw, t0w)
+        except Exception:
+            weighted_profiles[key] = (0.8, 0.5, 10.0)
+
+    return df_norm, base_profiles, weighted_profiles
+
+
+# ============================================================
+# 3. ML residual model on top of weighted ramp
+# ============================================================
+
+def train_ml_residual_models(df_norm, weighted_profiles):
+    """
+    Train RandomForest models to predict residuals:
+
+        residual = Yield_actual - Yield_weighted_ramp
+
+    One model per (Design_ID, WaferGrade, DieGrade).
+
+    Features (simple, Jupyter-friendly):
+        - NormWeek
+        - Volume
+
+    Returns:
+        ml_resid_models : dict[(Design_ID, WaferGrade, DieGrade)] -> RF model
+    """
+    ml_resid_models = {}
+    group_cols = ["Design_ID", "WaferGrade", "DieGrade"]
+
+    for key, g in df_norm.groupby(group_cols):
+        if key not in weighted_profiles:
+            continue
+
+        g = g[(g["Volume"] > 0) & np.isfinite(g["Yield"])].copy()
+        if len(g) < 10:
+            continue
+
+        Lw, kw, t0w = weighted_profiles[key]
+        weeks = g["NormWeek"].to_numpy()
+        y_weighted = logistic_curve(weeks, Lw, kw, t0w)
+
+        y_true = g["Yield"].to_numpy()
+        residuals = y_true - y_weighted
+
+        X = g[["NormWeek", "Volume"]].to_numpy()
+
+        rf = RandomForestRegressor(
+            n_estimators=300,
+            min_samples_leaf=3,
+            random_state=0,
+            n_jobs=-1,
+        )
+        rf.fit(X, residuals)
+        ml_resid_models[key] = rf
+
+    return ml_resid_models
+
+
+# ============================================================
+# 4. Compare ramps for a given Design_ID + WaferGrade + DieGrade
+# ============================================================
+
+def compare_ramps(df_norm,
+                  base_profiles,
+                  weighted_profiles,
+                  ml_resid_models,
+                  design_id,
+                  wafer_grade,
+                  die_grade):
+    """
+    For (Design_ID, WaferGrade, DieGrade), compare:
+      - base logistic ramp
+      - volume-weighted logistic ramp
+      - weighted ramp + ML residual
+
+    Returns:
+        result_df : dataframe with all curves
+        metrics   : dict of RMSE values
+    """
+    key = (design_id, wafer_grade, die_grade)
+
+    g = df_norm[
+        (df_norm["Design_ID"] == design_id) &
+        (df_norm["WaferGrade"] == wafer_grade) &
+        (df_norm["DieGrade"] == die_grade)
+    ].copy()
+
+    if g.empty:
+        raise ValueError("No data for that combination")
+
+    g = g.sort_values("NormWeek")
+
+    weeks    = g["NormWeek"].to_numpy()
+    week_idx = g["WeekIndex"].to_numpy()
+    y_true   = g["Yield"].to_numpy()
+    volumes  = g["Volume"].to_numpy()
+
+    # ----- base logistic -----
+    if key in base_profiles:
+        Lb, kb, t0b = base_profiles[key]
+        y_base = logistic_curve(weeks, Lb, kb, t0b)
+    else:
+        y_base = np.full_like(y_true, np.nan, dtype=float)
+
+    # ----- weighted logistic -----
+    if key in weighted_profiles:
+        Lw, kw, t0w = weighted_profiles[key]
+        y_weighted = logistic_curve(weeks, Lw, kw, t0w)
+    else:
+        y_weighted = np.full_like(y_true, np.nan, dtype=float)
+
+    # ----- weighted + ML residual -----
+    if key in ml_resid_models and key in weighted_profiles:
+        X = np.column_stack([weeks, volumes])
+        resid_pred = ml_resid_models[key].predict(X)
+        y_ml = y_weighted + resid_pred
+        y_ml = np.clip(y_ml, 0.0, 1.0)
+    else:
+        y_ml = np.full_like(y_true, np.nan, dtype=float)
+
+    # RMSE helper
+    def rmse(a, b):
+        mask = np.isfinite(a) & np.isfinite(b)
+        if mask.sum() == 0:
+            return np.nan
+        return sqrt(np.mean((a[mask] - b[mask])**2))
+
+    metrics = {
+        "RMSE_base"       : rmse(y_true, y_base),
+        "RMSE_weighted"   : rmse(y_true, y_weighted),
+        "RMSE_weighted+ML": rmse(y_true, y_ml),
+    }
+
+    result_df = pd.DataFrame({
+        "WeekIndex"        : week_idx,
+        "NormWeek"         : weeks,
+        "Yield_actual"     : y_true,
+        "Yield_base"       : y_base,
+        "Yield_weighted"   : y_weighted,
+        "Yield_weightedML" : y_ml,
+    })
+
+    return result_df, metrics
+
+
+def plot_ramps(result_df, design_id, wafer_grade, die_grade):
+    """
+    Quick comparison plot of actual vs all three models.
+    """
+    plt.figure()
+    plt.plot(result_df["NormWeek"], result_df["Yield_actual"],
+             "ko-", label="Actual")
+    plt.plot(result_df["NormWeek"], result_df["Yield_base"],
+             "b--", label="Base logistic")
+    plt.plot(result_df["NormWeek"], result_df["Yield_weighted"],
+             "g--", label="Weighted logistic")
+    plt.plot(result_df["NormWeek"], result_df["Yield_weightedML"],
+             "r-.", label="Weighted + ML residual")
+
+    plt.xlabel("NormWeek (from first WW of design)")
+    plt.ylabel("Yield")
+    plt.title(f"Design {design_id}, WaferGrade {wafer_grade}, DieGrade {die_grade}")
+    plt.ylim(0, 1.05)
+    plt.legend()
+    plt.show()
+
+
+# 1) df should already be loaded with the required columns
+# df = ...
+
+# 2) Build ramp profiles (base + weighted)
+df_norm, base_profiles, weighted_profiles = build_ramp_profiles(df)
+
+# 3) Train ML residual models on top of weighted ramps
+ml_resid_models = train_ml_residual_models(df_norm, weighted_profiles)
+
+# 4) Pick a specific combination to inspect
+design_id   = "D12345"
+wafer_grade = "WG1"
+die_grade   = "DG_A"
+
+result_df, metrics = compare_ramps(
+    df_norm,
+    base_profiles,
+    weighted_profiles,
+    ml_resid_models,
+    design_id,
+    wafer_grade,
+    die_grade,
+)
+
+print("RMSE metrics:", metrics)
+display(result_df.head())
+
+# 5) Plot all three ramps vs actual
+plot_ramps(result_df, design_id, wafer_grade, die_grade)
+
+
