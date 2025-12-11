@@ -670,4 +670,431 @@ display(result_df.head())
 # 5) Plot all three ramps vs actual
 plot_ramps(result_df, design_id, wafer_grade, die_grade)
 
+##################### 3rd ################################################
+
+# ========== 1) Workweek → absolute index (robust) ==========
+def ww_to_abs_index(ww):
+    """
+    Convert Workweek label to an absolute, monotonically increasing index using ISO weeks.
+    Accepts common formats:
+      - 'YYYYWW'        (e.g., '202550')
+      - 'YYYY-WW'       (e.g., '2025-50')
+      - strings containing 'YYYY' and 'WW' anywhere (we extract first match)
+      - integer/float that represent YYYYWW (e.g., 202550)
+
+    Returns: integer index (ISO week anchor converted to ordinal weeks)
+    """
+    if ww is None:
+        return np.nan
+
+    # Normalize to string
+    if isinstance(ww, (int, float, np.integer, np.floating)):
+        s = str(int(ww))
+    else:
+        s = str(ww)
+
+    # Extract year/week digits via regex
+    # Look for 4 digits (year) followed by optional sep then 2 digits (week)
+    m = re.search(r'(\d{4})\D?(\d{2})', s)
+    if not m:
+        return np.nan
+
+    year = int(m.group(1))
+    week = int(m.group(2))
+
+    # Validate week range (ISO: 1..53)
+    if week < 1 or week > 53:
+        return np.nan
+
+    # Use ISO week anchor (weekday=4 ensures valid week reference)
+    try:
+        # Convert to ordinal days and then to "week ordinal"
+        ordinal_days = date.fromisocalendar(year, week, 4).toordinal()
+        abs_idx = ordinal_days // 7
+        return abs_idx
+    except Exception:
+        # Fallback: linear mapping across years (still monotonic for sorting)
+        return year * 53 + week
+
+
+# ========== 2) Yield scaling helper ==========
+def _yield_to_unit_interval(y):
+    """
+    Ensure yield is in [0,1]. If data looks like percentages (max > 1.5), convert by /100.
+    Clips to (eps, 1-eps) to avoid boundary issues.
+    """
+    y = np.asarray(y, dtype=float)
+    if np.nanmax(y) > 1.5:   # likely percentage
+        y = y / 100.0
+    eps = 1e-6
+    return np.clip(y, eps, 1.0 - eps)
+
+
+# ========== 3) ETL: unweighted ==========
+def etl_traindata(sql_query, datatype):
+    """
+    Extract, transform, and load training data from BigQuery (no volume weighting).
+    Outputs aligned columns: ['Design_ID','Fab','WaferGrade','DieGrade'(dg only),
+                              'Workweek','Yield','WeekIndex','abs_idx']
+    """
+    if datatype not in ('dg', 'wg'):
+        raise ValueError("datatype must be 'dg' or 'wg'")
+
+    df = bq_client.query(sql_query).to_dataframe()
+    df.sort_values(by='timestamp', inplace=True)
+
+    if datatype == 'dg':
+        df.drop_duplicates(subset=['Design_ID','Attribute Hierarchy','Workweek'], keep='last', inplace=True)
+        df = df[['Design_ID','Fab','WaferGrade','DieGrade','Workweek','Yield_capability']].rename(columns={'Yield_capability':'Yield'})
+        df = df[~df['DieGrade'].isin(['LEVEL 3'])]
+    else:  # 'wg'
+        df.drop_duplicates(subset=['Design_ID','Attribute Hierarchy','Workweek'], keep='last', inplace=True)
+        df = df[['Design_ID','Fab','WaferGrade','Workweek','Yield_capability']].rename(columns={'Yield_capability':'Yield'})
+        df = df[~df['WaferGrade'].isin(['LEVEL 3'])]
+
+    # Workweek → abs_idx
+    df['abs_idx'] = df['Workweek'].map(ww_to_abs_index)
+    df = df.dropna(subset=['abs_idx'])
+    sort_cols = ['Design_ID','Fab','WaferGrade'] + (['DieGrade'] if datatype=='dg' else []) + ['abs_idx']
+    df = df.sort_values(sort_cols, kind='mergesort')
+
+    # First positive yield (per Design_ID/Fab/WaferGrade)
+    group_cols = ['Design_ID','Fab','WaferGrade']
+    first_pos = (df[df['Yield'] > 0].groupby(group_cols)['abs_idx'].min().rename("first_pos_abs"))
+    df = df.merge(first_pos, on=group_cols, how='left')
+    df = df[df['abs_idx'] >= df['first_pos_abs']].copy()
+    df['WeekIndex'] = (df['abs_idx'] - df['first_pos_abs']).astype(int)
+
+    # Remove program designs
+    df = df[~df['Design_ID'].isin(PGM_DIDS)]
+
+    return df
+
+
+# ========== 4) ETL: weighted (Volume included) ==========
+def etl_traindata_w_vol(sql_query, datatype):
+    """
+    Extract, transform, and load training data from BigQuery WITH volume weighting.
+    Outputs aligned columns: ['Design_ID','Fab','WaferGrade','DieGrade'(dg only),
+                              'Workweek','Yield','Volume','WeekIndex','abs_idx']
+    """
+    if datatype not in ('dg', 'wg'):
+        raise ValueError("datatype must be 'dg' or 'wg'")
+
+    df = bq_client.query(sql_query).to_dataframe()
+    df.sort_values(by='timestamp', inplace=True)
+
+    if datatype == 'dg':
+        df.drop_duplicates(subset=['Design_ID','Attribute Hierarchy','Workweek'], keep='last', inplace=True)
+        df = df[['Design_ID','Fab','WaferGrade','DieGrade','Workweek','Yield_capability','Volume']].rename(columns={'Yield_capability':'Yield'})
+        df = df[~df['DieGrade'].isin(['LEVEL 3'])]
+    else:  # 'wg'
+        # Include Volume in dedup subset to keep latest volume change
+        df.drop_duplicates(subset=['Design_ID','Attribute Hierarchy','Workweek','Volume'], keep='last', inplace=True)
+        df = df[['Design_ID','Fab','WaferGrade','Workweek','Yield_capability','Volume']].rename(columns={'Yield_capability':'Yield'})
+        df = df[~df['WaferGrade'].isin(['LEVEL 3'])]
+
+    # Workweek → abs_idx
+    df['abs_idx'] = df['Workweek'].map(ww_to_abs_index)
+    df = df.dropna(subset=['abs_idx'])
+    sort_cols = ['Design_ID','Fab','WaferGrade'] + (['DieGrade'] if datatype=='dg' else []) + ['abs_idx']
+    df = df.sort_values(sort_cols, kind='mergesort')
+
+    # First positive yield (per Design_ID/Fab/WaferGrade)
+    group_cols = ['Design_ID','Fab','WaferGrade']
+    first_pos = (df[df['Yield'] > 0].groupby(group_cols)['abs_idx'].min().rename("first_pos_abs"))
+    df = df.merge(first_pos, on=group_cols, how='left')
+    df = df[df['abs_idx'] >= df['first_pos_abs']].copy()
+    df['WeekIndex'] = (df['abs_idx'] - df['first_pos_abs']).astype(int)
+
+    # Remove program designs
+    df = df[~df['Design_ID'].isin(PGM_DIDS)]
+
+    return df
+
+
+# ========== 5) Logistic & fitter (weighted/unweighted) ==========
+def logistic_curve(t, L, k, t0):
+    return L / (1.0 + np.exp(-k * (t - t0)))
+
+def fit_ramp_curve_with_vol(weeks, yields, volumes=None):
+    """
+    Unified fitter for logistic ramp.
+    - If volumes provided, uses sigma = 1/sqrt(volume_norm) → WLS weights ∝ volume.
+      (Consistent with curve_fit semantics: weight = 1/sigma^2)
+    """
+    weeks = np.asarray(weeks, dtype=float)
+    yields = _yield_to_unit_interval(np.asarray(yields, dtype=float))
+    if volumes is not None:
+        volumes = np.asarray(volumes, dtype=float)
+
+    # Sort & align
+    order = np.argsort(weeks)
+    weeks, yields = weeks[order], yields[order]
+    if volumes is not None:
+        volumes = volumes[order]
+
+    # Filter finite
+    good = np.isfinite(weeks) & np.isfinite(yields)
+    weeks, yields = weeks[good], yields[good]
+    sigma = None
+    if volumes is not None:
+        volumes = volumes[good]
+        volumes = np.maximum(volumes, 1.0)        # avoid zeros
+        vol_norm = volumes / np.mean(volumes)     # stabilize scale
+        sigma = 1.0 / np.sqrt(vol_norm)           # higher vol → smaller sigma → higher weight
+
+    if len(weeks) < 5 or np.nanmax(yields) <= 1e-6:
+        raise RuntimeError("Too few points to fit")
+
+    # Normalize time base
+    t = weeks - np.nanmin(weeks)
+
+    # Bounds & initial guesses
+    lb = np.array([0.40, 0.01, -5.0], dtype=float)
+    ub = np.array([1.15, 3.00, 80.0], dtype=float)
+    L0 = float(np.clip(np.percentile(yields, 95), 0.6, 1.0))
+    spread = max(np.ptp(t), 1.0)
+    k0 = float(np.clip(1.0 / spread, 0.05, 2.0))
+    t00 = float(np.median(t))
+    tiny = 1e-4
+    p0 = np.array([L0, k0, t00], dtype=float)
+    p0 = np.minimum(np.maximum(p0, lb + tiny), ub - tiny)
+
+    popt, _ = curve_fit(
+        logistic_curve, t, yields,
+        p0=p0, bounds=(lb, ub),
+        sigma=sigma, absolute_sigma=False, method="trf"
+    )
+    return popt
+
+
+# ========== 6) NormWeek helper (per Design_ID) ==========
+def add_normweek(df):
+    """
+    Add NormWeek per Design_ID from WeekIndex (already normalized in ETL).
+    If WeekIndex is not present, compute from Workweek via ww_to_abs_index.
+    """
+    df = df.copy()
+    if 'WeekIndex' in df.columns:
+        df['NormWeek'] = df['WeekIndex'].astype(int)
+    else:
+        df['abs_idx'] = df['Workweek'].map(ww_to_abs_index)
+        first_pos = (df[df['Yield'] > 0].groupby(['Design_ID','Fab','WaferGrade'])['abs_idx'].min().rename("first_pos_abs"))
+        df = df.merge(first_pos, on=['Design_ID','Fab','WaferGrade'], how='left')
+        df['NormWeek'] = (df['abs_idx'] - df['first_pos_abs']).astype(int)
+    return df
+
+
+# ========== 7) Unified training for WG/DG/Design ==========
+def train_profiles(
+    df: pd.DataFrame,
+    level: str = "die",             # 'wafer' | 'die' | 'design'
+    weighted: bool = True,
+    min_points: int = 5,
+    extra_group_cols: list = None   # e.g., ['category']
+):
+    """
+    Train ramp profiles with consistent filtering & aligned arrays.
+    Returns:
+        df_norm: DataFrame with NormWeek added
+        ramp_profiles: dict[key] -> {'k','t0','L_avg','n_points'}
+        group_sizes: dict[key] -> n_points
+        total_workweeks: int (grand total across groups)
+    """
+    if level == "wafer":
+        group_cols = ["Fab", "WaferGrade"]
+        needed_cols = ["Design_ID","Fab","WaferGrade","WeekIndex","Yield"] + (["Volume"] if weighted else [])
+    elif level == "die":
+        group_cols = ["Fab", "WaferGrade", "DieGrade"]
+        needed_cols = ["Design_ID","Fab","WaferGrade","DieGrade","WeekIndex","Yield"] + (["Volume"] if weighted else [])
+    elif level == "Category":
+        group_cols = ["Design_ID", "WaferGrade", "DieGrade"]
+        needed_cols = ["Design_ID","WaferGrade","DieGrade","WeekIndex","Yield"] + (["Volume"] if weighted else [])
+    else:
+        raise ValueError("level must be one of: 'wafer', 'die', 'design'")
+
+    if extra_group_cols:
+        group_cols = group_cols + list(extra_group_cols)
+
+    # Column validation
+    missing = set(needed_cols) - set(df.columns)
+    if missing:
+        raise ValueError(f"Input df missing required columns for level='{level}': {sorted(missing)}")
+
+    # Add NormWeek
+    df_norm = add_normweek(df)
+
+    ramp_profiles = {}
+    group_sizes = {}
+    failed = []
+    total_workweeks = 0
+
+    for key, g in df_norm.groupby(group_cols, dropna=False):
+        # Consistent filtering
+        if weighted:
+            g = g[(g["Yield"] > 0) & (g["Volume"] > 0)].copy()
+        else:
+            g = g[(g["Yield"] > 0)].copy()
+        if len(g) < min_points:
+            continue
+
+        weeks   = g["NormWeek"].to_numpy(dtype=float)
+        yields  = g["Yield"].to_numpy(dtype=float)
+        volumes = g["Volume"].to_numpy(dtype=float) if weighted else None
+
+        n_points = weeks.size
+        group_sizes[key] = int(n_points)
+        total_workweeks += int(n_points)
+
+        try:
+            popt = fit_ramp_curve_with_vol(weeks, yields, volumes)
+            L, k, t0 = map(float, popt)
+            ramp_profiles[key] = {"k": k, "t0": t0, "L_avg": L, "n_points": n_points}
+        except Exception as e:
+            failed.append((key, str(e)))
+            ramp_profiles[key] = {
+                "k": 0.5, "t0": 10.0,
+                "L_avg": float(np.nanmean(_yield_to_unit_interval(yields))),
+                "n_points": n_points
+            }
+
+    print(f"\nTotal workweeks across all groups: {total_workweeks}")
+    if failed:
+        print(f"⚠️ {len(failed)} fits failed:")
+        for k, err in failed[:5]:
+            print(f"  {k}: {err}")
+
+    return df_norm, ramp_profiles, group_sizes, total_workweeks
+
+
+# ========== 8) ML residual models (optional) ==========
+def train_ml_residual_models(df_norm: pd.DataFrame, ramp_profiles: dict, group_cols: list):
+    """
+    Train RandomForest models to predict residuals per group key:
+      residual = Yield_actual - Yield_ramp_fit
+    Features: NormWeek, Volume
+    """
+    ml_resid_models = {}
+    for key, g in df_norm.groupby(group_cols, dropna=False):
+        if key not in ramp_profiles:
+            continue
+
+        g = g[(g["Volume"] > 0) & np.isfinite(g["Yield"])].copy()
+        if len(g) < 10:
+            continue
+
+        L, k, t0 = ramp_profiles[key]["L_avg"], ramp_profiles[key]["k"], ramp_profiles[key]["t0"]
+        weeks = g["NormWeek"].to_numpy()
+        y_fit = logistic_curve(weeks, L, k, t0)
+
+        y_true = _yield_to_unit_interval(g["Yield"].to_numpy())
+        residuals = y_true - y_fit
+
+        X = g[["NormWeek", "Volume"]].to_numpy()
+        rf = RandomForestRegressor(
+            n_estimators=300,
+            min_samples_leaf=3,
+            random_state=0,
+            n_jobs=-1,
+        )
+        rf.fit(X, residuals)
+        ml_resid_models[key] = rf
+
+    return ml_resid_models
+
+
+# ========== 9) Comparison helper ==========
+def compare_ramps(df_norm, ramp_profiles, ml_resid_models, key, group_cols):
+    """
+    Compare fitted ramp vs ramp+ML residual for a specific group key.
+    Returns: (result_df, metrics)
+    """
+    assert len(key) == len(group_cols), "key must match group_cols length"
+
+    g = df_norm.copy()
+    for col, val in zip(group_cols, key):
+        g = g[g[col] == val]
+    if g.empty:
+        raise ValueError("No data for that combination")
+
+    g = g.sort_values("NormWeek")
+    weeks    = g["NormWeek"].to_numpy()
+    week_idx = g["WeekIndex"].to_numpy()
+    y_true   = _yield_to_unit_interval(g["Yield"].to_numpy())
+    volumes  = g["Volume"].to_numpy() if "Volume" in g.columns else np.full_like(y_true, np.nan)
+
+    # Fitted logistic
+    if key in ramp_profiles:
+        L, k, t0 = ramp_profiles[key]["L_avg"], ramp_profiles[key]["k"], ramp_profiles[key]["t0"]
+        y_ramp = logistic_curve(weeks, L, k, t0)
+    else:
+        y_ramp = np.full_like(y_true, np.nan, dtype=float)
+
+    # Ramp + ML residual
+    if (key in ml_resid_models) and (key in ramp_profiles) and ("Volume" in g.columns):
+        X = np.column_stack([weeks, volumes])
+        resid_pred = ml_resid_models[key].predict(X)
+        y_ml = np.clip(y_ramp + resid_pred, 0.0, 1.0)
+    else:
+        y_ml = np.full_like(y_true, np.nan, dtype=float)
+
+    def rmse(a, b):
+        mask = np.isfinite(a) & np.isfinite(b)
+        if mask.sum() == 0:
+            return np.nan
+        return sqrt(np.mean((a[mask] - b[mask])**2))
+
+    metrics = {
+        "RMSE_ramp"    : rmse(y_true, y_ramp),
+        "RMSE_ramp+ML" : rmse(y_true, y_ml),
+        "n_points"     : int(len(weeks)),
+    }
+
+    result_df = pd.DataFrame({
+        "WeekIndex"     : week_idx,
+        "NormWeek"      : weeks,
+        "Yield_actual"  : y_true,
+        "Yield_ramp"    : y_ramp,
+        "Yield_rampML"  : y_ml,
+    })
+    return result_df, metrics
+
+
+# ========== 10) Plot helper ==========
+def plot_ramps(result_df, title="Ramp comparison"):
+    plt.figure()
+    plt.plot(result_df["NormWeek"], result_df["Yield_actual"], "ko-", label="Actual")
+    if "Yield_ramp" in result_df:
+        plt.plot(result_df["NormWeek"], result_df["Yield_ramp"], "g--", label="Fitted ramp")
+    if "Yield_rampML" in result_df:
+        plt.plot(result_df["NormWeek"], result_df["Yield_rampML"], "r-.", label="Ramp + ML residual")
+    plt.xlabel("NormWeek (from first WW of design)")
+    plt.ylabel("Yield")
+    plt.title(title)
+    plt.ylim(0, 1.05)
+    plt.legend()
+    plt.show()
+
+#Pull wafer-grade data (with volume)
+data_wg = etl_traindata_w_vol(wgsql, datatype='wg')
+# Train WG profiles (weighted)
+df_norm_wg, ramp_wg, sizes_wg, total_wg = train_profiles(data_wg, level='wafer', weighted=True)
+print("Total WG workweeks:", total_wg)
+
+# Pull die-grade data (with volume)
+data_dg = etl_traindata_w_vol(dgsql, datatype='dg')
+# Train DG profiles (weighted)
+df_norm_dg, ramp_dg, sizes_dg, total_dg = train_profiles(data_dg, level='wafer', weighted=True)
+print("Total DG workweeks:", total_dg)
+
+# Train ML residuals on DG
+group_cols_dg = ["Fab", "WaferGrade"]
+ml_dg = train_ml_residual_models(df_norm_dg, ramp_dg, group_cols_dg)
+
+# # Compare & plot for one DG key
+# example_key = ("F11", "WG1", "DG_A")  # replace with real values present in your df
+# res_df, metrics = compare_ramps(df_norm_dg, ramp_dg, ml_dg, example_key, group_cols_dg)
+# print("Metrics:", metrics)
+# plot_ramps(res_df, title=f"DG {example_key}")
 
