@@ -1,0 +1,149 @@
+Yield Projection Framework
+Weighted S-Curve + ML Residual Correction
+Micron Technology • Engineering Analytics
+
+⸻
+
+⭐ SLIDE 2 — Agenda
+	•	Why Yield Ramps Follow an S-Curve
+	•	Why Weighting by Volume Is Statistically Correct
+	•	Limitations of Pure Logistic Models
+	•	ML Residual Learner (Category/Fab/WG/DG Effects)
+	•	Combined Model Architecture
+	•	Summary & Recommendations
+
+⸻
+
+⭐ SLIDE 3 — Semiconductor Yield Behaves Like an S-Curve
+
+Key Observations
+	•	Initial ramp is slow due to process immaturity
+	•	Mid-phase rapid improvement from learning/actions
+	•	Late-phase saturation as defects asymptotically reduce
+
+Canonical Model
+Y(t) = \frac{L}{1 + e^{-k(t - t_0)}}
+
+Why Logistic?
+	•	Arises from classic defect-density decay
+	•	Matches physical manufacturing learning curve
+	•	Smooth, monotonic, interpretable
+
+⸻
+
+⭐ SLIDE 4 — Why Weighted S-Curve?
+
+Yield variance depends on testing volume
+
+\text{Var}(Y) = \frac{p(1-p)}{n}
+
+Where
+	•	p = true yield
+	•	n = number of dice (≈ volume)
+
+So:
+
+w_i = n_i
+
+Meaning:
+	•	High-volume weeks are more reliable
+	•	Low-volume NPI weeks are noisy
+	•	Weighting stabilizes the curve
+
+⸻
+
+⭐ SLIDE 5 — Mathematical Form of Weighted Fit
+
+\min_{L,k,t_0} \sum_i n_i \cdot \left( Y_i - \frac{L}{1 + e^{-k(t_i - t_0)}} \right)^2
+
+Interpretation
+	•	Weighted nonlinear regression
+	•	Statistically optimal under binomial noise
+	•	Preserves physically meaningful S-shape
+	•	Produces stable asymptote estimation
+
+⸻
+
+⭐ SLIDE 6 — Why Logistic Alone Is Not Enough
+
+Real Micron products show systematic deviations due to:
+	•	Fab-level offsets (tools, chambers, recipe changes)
+	•	WaferGrade behavior differences
+	•	DieGrade ramp shifts
+	•	Category differences (Compute vs LP vs Graphics)
+	•	Excursions and test-induced shifts
+
+A single logistic cannot capture these second-order effects.
+
+⸻
+
+⭐ SLIDE 7 — Residual Learner Intuition
+
+We decompose actual yield:
+
+Y_{\text{actual}}(t) = Y_{\text{logistic}}(t) + \epsilon(t)
+
+Where:
+	•	Logistic = global physics of ramp
+	•	Residual = system effects not modeled by logistic
+
+Residual patterns come from:
+	•	Category (Compute ramps faster, LP slower)
+	•	WG/DG (grading rules influence ramp)
+	•	Fab signature
+	•	Volume instability
+	•	Assembly/test impacts
+
+Residuals are smooth, structured, and predictable → ideal for ML.
+
+⸻
+
+⭐ SLIDE 8 — ML Residual Model
+
+Model: Random Forest Regressor
+Predicts:
+\hat{\epsilon}(t) = f_{\theta}(\text{NormWeek}, \text{Volume}, \text{Fab}, \text{WG}, \text{DG}, \text{Category})
+
+Advantages:
+	•	Learns nonlinear corrections
+	•	Captures category-specific ramp shapes
+	•	Captures fab/test systematic shifts
+	•	Prevents ML from overriding global S-curve behavior
+
+⸻
+
+⭐ SLIDE 9 — Why Not Use ML Alone?
+
+ML-only model issues:
+	•	Produces non-monotonic, non-physical curves
+	•	Overfits noise in low-volume weeks
+	•	Cannot extrapolate NPI ramps
+	•	Cannot guarantee asymptote or ramp structure
+
+Thus ML should only model residuals, not base trend.
+
+⸻
+
+⭐ SLIDE 10 — Combined Model Architecture
+
+\boxed{
+Y_{\text{final}}(t)
+=
+Y_{\text{logistic}}(t)
++
+\hat{\epsilon}(t)
+}
+
+Components
+	•	Weighted S-curve = backbone
+	•	Residual ML = correction layer
+
+Benefits
+	•	Interpretable
+	•	Stable
+	•	Captures real Micron behavior
+	•	Accurate for PGM & NPI designs
+
+⸻
+
+⭐ SLIDE 11 — Feature Space
