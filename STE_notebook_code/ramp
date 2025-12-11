@@ -1,0 +1,337 @@
+"""
+Yield ramp modelling with DG + WaferGrade:
+
+- Base model     : unweighted logistic ramp (per Design/Fab/WaferGrade/DieGrade)
+- Weighted model : logistic ramp using Volume as weights
+- ML model       : RandomForest using week + Fab + WaferGrade + DieGrade + Volume
+
+Key public functions:
+    train_ramp_profiles(df)              -> base + weighted logistic profiles
+    train_ml_models(df)                  -> per-design ML models (dict)
+    compare_models_for_design(df, ...)   -> metrics + prediction table for one design
+"""
+
+import numpy as np
+import pandas as pd
+from scipy.optimize import curve_fit
+from math import sqrt
+
+from sklearn.ensemble import RandomForestRegressor
+
+# -------------------------------------------------------------------
+# Logistic ramp model
+# -------------------------------------------------------------------
+
+def logistic_curve(t, L, k, t0):
+    """
+    Standard logistic curve:
+
+        t  : time (e.g. normalized week index)
+        L  : asymptotic target yield
+        k  : growth rate (steepness)
+        t0 : midpoint (time when curve is L/2)
+
+    Returns: same shape as t, in [0, L].
+    """
+    t = np.asarray(t, dtype=float)
+    return L / (1.0 + np.exp(-k * (t - t0)))
+
+
+def fit_ramp_curve(weeks, yields, weights=None):
+    """
+    Fit logistic ramp to (weeks, yields).
+
+    weeks   : 1D array of week indices (already normalized)
+    yields  : 1D array of yield (0..1)
+    weights : optional 1D array (e.g. Volume). Higher weight -> more influence.
+
+    Returns (L, k, t0).
+    """
+    weeks = np.asarray(weeks, dtype=float)
+    yields = np.asarray(yields, dtype=float)
+
+    # sort by week
+    order = np.argsort(weeks)
+    weeks, yields = weeks[order], yields[order]
+
+    # filter invalid
+    good = np.isfinite(weeks) & np.isfinite(yields)
+    weeks, yields = weeks[good], yields[good]
+
+    if len(weeks) < 5 or np.nanmax(yields) < 1e-6:
+        raise RuntimeError("Too few points to fit ramp")
+
+    # crude initial guesses
+    L0 = float(np.clip(np.percentile(yields, 95), 0.6, 1.0))
+    spread = max(np.ptp(weeks), 1.0)
+    k0 = float(np.clip(1.0 / spread, 0.05, 2.0))
+    t0 = float(np.median(weeks))
+    p0 = np.array([L0, k0, t0], dtype=float)
+
+    # bounds for [L, k, t0]
+    lb = np.array([0.10, 0.01, -50.0], dtype=float)
+    ub = np.array([1.50, 3.00,  50.0], dtype=float)
+
+    # handle weights via sigma (curve_fit uses 1/sigma^2 as weights)
+    if weights is not None:
+        w = np.asarray(weights, dtype=float)
+        w = w[order][good]
+        # avoid zero / tiny
+        w = np.clip(w, 1.0, None)
+        sigma = 1.0 / np.sqrt(w)
+    else:
+        sigma = None
+
+    popt, _ = curve_fit(
+        logistic_curve,
+        weeks,
+        yields,
+        p0=p0,
+        bounds=(lb, ub),
+        sigma=sigma,
+        absolute_sigma=False,
+        method="trf",
+    )
+    L, k, t0 = map(float, popt)
+    return L, k, t0
+
+
+# -------------------------------------------------------------------
+# Training ramp profiles (DG + WaferGrade)
+# -------------------------------------------------------------------
+
+def add_normweek(df):
+    """
+    Add a 'NormWeek' column per Design_ID so that the earliest WeekIndex
+    for each design becomes 0.
+    """
+    df = df.copy()
+    df['NormWeek'] = df.groupby('Design_ID')['WeekIndex'] \
+                       .transform(lambda x: x - x.min())
+    return df
+
+
+def train_ramp_profiles(df):
+    """
+    Train two dictionaries of ramp profiles:
+
+        - base_profiles     : unweighted logistic fit
+        - weighted_profiles : logistic fit weighted by Volume
+
+    Grouping key: (Design_ID, Fab, WaferGrade, DieGrade)
+
+    Each entry: { 'L': L, 'k': k, 't0': t0 }
+    """
+    df = add_normweek(df)
+
+    base_profiles = {}
+    weighted_profiles = {}
+
+    group_cols = ['Design_ID', 'Fab', 'WaferGrade', 'DieGrade']
+
+    for key, g in df.groupby(group_cols):
+        # Only use rows with positive volume & finite yields
+        g = g[(g['Volume'] > 0) & np.isfinite(g['Yield'])].copy()
+        if g.empty:
+            continue
+
+        weeks = g['NormWeek'].to_numpy()
+        yields = g['Yield'].to_numpy()
+        vols   = g['Volume'].to_numpy()
+
+        # --- base/unweighted ramp ---
+        try:
+            L, k, t0 = fit_ramp_curve(weeks, yields, weights=None)
+            base_profiles[key] = {'L': L, 'k': k, 't0': t0}
+        except Exception:
+            # fallback
+            base_profiles[key] = {'L': 0.8, 'k': 0.5, 't0': 10.0}
+
+        # --- volume-weighted ramp ---
+        try:
+            Lw, kw, t0w = fit_ramp_curve(weeks, yields, weights=vols)
+            weighted_profiles[key] = {'L': Lw, 'k': kw, 't0': t0w}
+        except Exception:
+            weighted_profiles[key] = {'L': 0.8, 'k': 0.5, 't0': 10.0}
+
+    return base_profiles, weighted_profiles
+
+
+# -------------------------------------------------------------------
+# ML approach (RandomForest per Design_ID)
+# -------------------------------------------------------------------
+
+def _encode_categoricals_for_rf(df, cols):
+    """
+    Simple integer encoding for categorical columns.
+    RandomForest is robust to this as long as ordering has no meaning for us.
+    """
+    df = df.copy()
+    for c in cols:
+        codes, _ = pd.factorize(df[c])
+        df[c + '_code'] = codes
+    return df
+
+
+def train_ml_models(df):
+    """
+    Train an ML model (RandomForestRegressor) per Design_ID.
+
+    Returns:
+        ml_models : dict keyed by Design_ID -> trained RF model
+    """
+    df = add_normweek(df)
+
+    ml_models = {}
+    cat_cols = ['Fab', 'WaferGrade', 'DieGrade']
+
+    for design_id, g in df.groupby('Design_ID'):
+        g = g[(g['Volume'] > 0) & np.isfinite(g['Yield'])].copy()
+        if len(g) < 10:
+            continue
+
+        g = _encode_categoricals_for_rf(g, cat_cols)
+
+        feature_cols = ['NormWeek', 'Volume'] + [c + '_code' for c in cat_cols]
+        X = g[feature_cols].to_numpy()
+        y = g['Yield'].to_numpy()
+
+        rf = RandomForestRegressor(
+            n_estimators=300,
+            max_depth=None,
+            min_samples_leaf=3,
+            random_state=0,
+            n_jobs=-1,
+        )
+        rf.fit(X, y)
+        ml_models[design_id] = rf
+
+    return ml_models
+
+
+# -------------------------------------------------------------------
+# Comparison for a particular Design_ID
+# -------------------------------------------------------------------
+
+def compare_models_for_design(df, base_profiles, weighted_profiles,
+                              ml_models,
+                              design_id,
+                              fab=None,
+                              wafer_grade=None,
+                              die_grade=None):
+    """
+    Compare base logistic, weighted logistic, and ML model
+    for one design and (optionally) one (Fab, WaferGrade, DieGrade).
+
+    Returns:
+        result_df : dataframe with columns:
+            WeekIndex, NormWeek, Yield_actual,
+            Yield_base, Yield_weighted, Yield_ml
+        metrics   : dict with RMSE for each model
+    """
+    df = add_normweek(df)
+    d = df[df['Design_ID'] == design_id].copy()
+    if fab is not None:
+        d = d[d['Fab'] == fab]
+    if wafer_grade is not None:
+        d = d[d['WaferGrade'] == wafer_grade]
+    if die_grade is not None:
+        d = d[d['DieGrade'] == die_grade]
+
+    if d.empty:
+        raise ValueError("No rows found for given filters")
+
+    key = (design_id,
+           d['Fab'].iloc[0],
+           d['WaferGrade'].iloc[0],
+           d['DieGrade'].iloc[0])
+
+    weeks = d['NormWeek'].to_numpy()
+    week_idx = d['WeekIndex'].to_numpy()
+    y_true = d['Yield'].to_numpy()
+
+    # ---------- base logistic ----------
+    if key in base_profiles:
+        p = base_profiles[key]
+        y_base = logistic_curve(weeks, p['L'], p['k'], p['t0'])
+    else:
+        y_base = np.full_like(y_true, np.nan, dtype=float)
+
+    # ---------- weighted logistic ----------
+    if key in weighted_profiles:
+        pw = weighted_profiles[key]
+        y_weighted = logistic_curve(weeks, pw['L'], pw['k'], pw['t0'])
+    else:
+        y_weighted = np.full_like(y_true, np.nan, dtype=float)
+
+    # ---------- ML predictions ----------
+    if design_id in ml_models:
+        g = d.copy()
+        g = _encode_categoricals_for_rf(g, ['Fab', 'WaferGrade', 'DieGrade'])
+        feature_cols = ['NormWeek', 'Volume',
+                        'Fab_code', 'WaferGrade_code', 'DieGrade_code']
+        X = g[feature_cols].to_numpy()
+        rf = ml_models[design_id]
+        y_ml = rf.predict(X)
+    else:
+        y_ml = np.full_like(y_true, np.nan, dtype=float)
+
+    # ---------- Metrics ----------
+    def rmse(a, b):
+        mask = np.isfinite(a) & np.isfinite(b)
+        if mask.sum() == 0:
+            return np.nan
+        return sqrt(np.mean((a[mask] - b[mask])**2))
+
+    metrics = {
+        'RMSE_base'    : rmse(y_true, y_base),
+        'RMSE_weighted': rmse(y_true, y_weighted),
+        'RMSE_ml'      : rmse(y_true, y_ml),
+    }
+
+    result_df = pd.DataFrame({
+        'WeekIndex'     : week_idx,
+        'NormWeek'      : weeks,
+        'Yield_actual'  : y_true,
+        'Yield_base'    : y_base,
+        'Yield_weighted': y_weighted,
+        'Yield_ml'      : y_ml,
+    }).sort_values('WeekIndex')
+
+    return result_df, metrics
+
+
+# -------------------------------------------------------------------
+# Example usage (you can adapt this in your main script)
+# -------------------------------------------------------------------
+if __name__ == "__main__":
+    # df should be a dataframe with:
+    # Design_ID, Fab, WaferGrade, DieGrade, WeekIndex, Yield, Volume
+    # Here we assume you've already loaded it as `df`.
+    # df = etl_traindata(...)
+
+    # 1. Train logistic profiles
+    base_profiles, weighted_profiles = train_ramp_profiles(df)
+
+    # 2. Train ML models
+    ml_models = train_ml_models(df)
+
+    # 3. Compare for a particular design + grade combo
+    target_design = "D12345"
+    target_fab = "FAB1"
+    target_wg = "WG1"
+    target_dg = "DG1"
+
+    result_df, metrics = compare_models_for_design(
+        df,
+        base_profiles,
+        weighted_profiles,
+        ml_models,
+        design_id=target_design,
+        fab=target_fab,
+        wafer_grade=target_wg,
+        die_grade=target_dg,
+    )
+
+    print("Metrics for design", target_design, ":", metrics)
+    print(result_df.head())
